@@ -27,7 +27,19 @@ async function getSettings(): Promise<Settings> {
 
 /* ------------------------------- INGEST ---------------------------------- */
 
-export async function runIngest(): Promise<Record<string, unknown>> {
+export interface IngestStats {
+  fetched: number;
+  junk: number;
+  disrespect: number;
+  offTopic: number;
+  stale: number;
+  duplicate: number;
+  queued: number;
+  breaking: number;
+  errors: string[];
+}
+
+export async function runIngest(): Promise<IngestStats> {
   const settings = await getSettings();
   const stats = {
     fetched: 0,
@@ -352,9 +364,16 @@ function randomGapMinutes(settings: Settings, night: boolean): number {
   return Math.round(min + Math.random() * Math.max(0, max - min));
 }
 
+export interface PublishResult {
+  sent: number;
+  chats: number;
+  skipped: string;
+  items: string[];
+}
+
 export async function runPublish(
   opts: { breakingOnly?: boolean; force?: number } = {},
-): Promise<Record<string, unknown>> {
+): Promise<PublishResult> {
   const settings = await getSettings();
   const night = isNight(settings);
   const result = { sent: 0, chats: 0, skipped: "" as string, items: [] as string[] };

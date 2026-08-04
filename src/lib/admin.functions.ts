@@ -64,7 +64,7 @@ export const saveSettings = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => settingsSchema.parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
-    const { error } = await context.supabase.from("settings").update(data).eq("id", 1);
+    const { error } = await context.supabase.from("settings").update(data as never).eq("id", 1);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -91,7 +91,7 @@ export const updateChat = createServerFn({ method: "POST" })
     const patch: Record<string, unknown> = {};
     if (data.active !== undefined) patch["active"] = data.active;
     if (data.language !== undefined) patch["language"] = data.language;
-    const { error } = await context.supabase.from("chats").update(patch).eq("id", data.id);
+    const { error } = await context.supabase.from("chats").update(patch as never).eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -122,7 +122,7 @@ export const upsertTopic = createServerFn({ method: "POST" })
       if (data.enabled !== undefined) patch["enabled"] = data.enabled;
       if (data.query) patch["query"] = data.query;
       if (data.category) patch["category"] = data.category;
-      const { error } = await sb.from("topic_queries").update(patch).eq("id", data.id);
+      const { error } = await sb.from("topic_queries").update(patch as never).eq("id", data.id);
       if (error) throw new Error(error.message);
       return { ok: true };
     }
@@ -159,7 +159,7 @@ export const upsertSource = createServerFn({ method: "POST" })
     }
     const { id, remove: _remove, ...rest } = data;
     if (id) {
-      const { error } = await sb.from("sources").update(rest).eq("id", id);
+      const { error } = await sb.from("sources").update(rest as never).eq("id", id);
       if (error) throw new Error(error.message);
       return { ok: true };
     }
