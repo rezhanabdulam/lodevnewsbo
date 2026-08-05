@@ -120,10 +120,17 @@ export async function runIngest(): Promise<IngestStats> {
           }
         }
         try {
-          collected.push(...(await fetchAlJazeeraRss()));
+          const topical =
+            /iran|tehran|israel|hezbollah|houthi|yemen|iraq|militia|hormuz|oil|gold|nuclear|trump|khamenei|idf|strike/i;
+          collected.push(
+            ...(await fetchAlJazeeraRss()).filter((a) =>
+              topical.test(`${a.title} ${a.description ?? ""}`),
+            ),
+          );
         } catch {
           /* optional safety net */
         }
+
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
