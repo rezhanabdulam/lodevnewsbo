@@ -509,6 +509,9 @@ export async function runPublish(
           original_published_at: item.original_published_at,
         });
         result.sent += 1;
+        publishedTitles.unshift(item.headline);
+        publishedKeys.add(item.dedup_key);
+
         await new Promise((r) => setTimeout(r, 60_000));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
