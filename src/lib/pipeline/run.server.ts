@@ -66,46 +66,72 @@ export async function runIngest(): Promise<IngestStats> {
   const queries = (topics ?? []).map((t: any) => t.query as string);
   const collected: FetchedArticle[] = [];
 
-  for (const query of queries) {
-    let gotResults = false;
-    for (const source of sources ?? []) {
-      if (gotResults) break;
-      try {
-        if (source.kind === "newsdata") {
-          if (source.quota_date !== new Date().toISOString().slice(0, 10)) {
-            await supabaseAdmin
-              .from("sources")
-              .update({ used_today: 0, quota_date: new Date().toISOString().slice(0, 10) })
-              .eq("id", source.id);
-            source.used_today = 0;
-          }
-          if (source.daily_quota && source.used_today >= source.daily_quota) continue;
-          const key = process.env[source.secret_ref ?? "NEWSDATA_API_KEY"];
-          if (!key) continue;
-          const items = await fetchNewsData(key, query);
-          await supabaseAdmin
-            .from("sources")
-            .update({ used_today: (source.used_today ?? 0) + 1, last_error: null })
-            .eq("id", source.id);
-          source.used_today = (source.used_today ?? 0) + 1;
-          if (items.length > 0) {
-            collected.push(...items);
-            gotResults = true;
-          }
-        } else if (source.kind === "rss") {
-          const items = await fetchGoogleNewsRss(query);
-          if (items.length > 0) {
-            collected.push(...items);
-            gotResults = true;
-          }
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        stats.errors.push(`${source.name} / ${query}: ${msg}`);
-        await supabaseAdmin.from("sources").update({ last_error: msg }).eq("id", source.id);
-      }
+  // NewsData has a hard daily credit cap, so topics are OR-batched into a few
+  // wide queries instead of one request per topic.
+  const groups: string[] = [];
+  let current = "";
+  for (const q of queries) {
+    const candidate = current ? `${current} OR ${q}` : q;
+    if (candidate.length > 95) {
+      if (current) groups.push(current);
+      current = q;
+    } else {
+      current = candidate;
     }
   }
+  if (current) groups.push(current);
+  const newsDataGroups = groups.slice(0, 3);
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const source of sources ?? []) {
+    try {
+      if (source.kind === "newsdata") {
+        if (source.quota_date !== today) {
+          await supabaseAdmin
+            .from("sources")
+            .update({ used_today: 0, quota_date: today })
+            .eq("id", source.id);
+          source.used_today = 0;
+        }
+        const key = process.env[source.secret_ref ?? "NEWSDATA_API_KEY"];
+        if (!key) continue;
+        for (const group of newsDataGroups) {
+          if (source.daily_quota && (source.used_today ?? 0) >= source.daily_quota) {
+            stats.errors.push("NewsData.io: daily quota reached, using free feeds");
+            break;
+          }
+          const items = await fetchNewsData(key, group);
+          source.used_today = (source.used_today ?? 0) + 1;
+          await supabaseAdmin
+            .from("sources")
+            .update({ used_today: source.used_today, last_error: null })
+            .eq("id", source.id);
+          collected.push(...items);
+        }
+      } else if (source.kind === "rss") {
+        for (const query of queries) {
+          try {
+            collected.push(...(await fetchRssSearch(query)));
+          } catch (err) {
+            stats.errors.push(
+              `rss / ${query}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        try {
+          collected.push(...(await fetchAlJazeeraRss()));
+        } catch {
+          /* optional safety net */
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      stats.errors.push(`${source.name}: ${msg}`);
+      await supabaseAdmin.from("sources").update({ last_error: msg }).eq("id", source.id);
+    }
+  }
+
 
   stats.fetched = collected.length;
 
