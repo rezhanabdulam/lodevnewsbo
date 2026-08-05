@@ -413,8 +413,35 @@ export async function runPublish(
   result.chats = (chats ?? []).length;
 
   const eightHoursAgo = new Date(Date.now() - 8 * 3_600_000).toISOString();
+  const twoDaysAgo = new Date(Date.now() - 48 * 3_600_000).toISOString();
+
+  // Context dedup: headlines already sent recently, to avoid re-posting the same event.
+  const { data: recentPublished } = await supabaseAdmin
+    .from("published_history")
+    .select("headline, dedup_key")
+    .gte("published_at", twoDaysAgo)
+    .order("published_at", { ascending: false })
+    .limit(200);
+  const publishedTitles: string[] = (recentPublished ?? [])
+    .map((r: any) => r.headline)
+    .filter(Boolean);
+  const publishedKeys = new Set<string>(
+    (recentPublished ?? []).map((r: any) => r.dedup_key),
+  );
 
   for (const item of items as any[]) {
+    // Same event already covered? mark and skip without sending.
+    const repeated =
+      publishedKeys.has(item.dedup_key) ||
+      publishedTitles.some((t) => titleSimilarity(t, item.headline) >= 0.6);
+    if (repeated) {
+      await supabaseAdmin.from("queue").update({ status: "duplicate" }).eq("id", item.id);
+      continue;
+    }
+
+    // Translate once per item (only for messages actually about to be sent).
+    const translationCache = new Map<string, { headline: string; summary: string } | null>();
+
     for (const chat of (chats ?? []) as any[]) {
       const { data: already } = await supabaseAdmin
         .from("published_history")
@@ -430,21 +457,33 @@ export async function runPublish(
       let summary = item.summary as string;
 
       if (language === "ckb") {
-        const translated = await translateToSorani(`${headline}\n\n${summary}`);
-        if (translated.text) {
-          const [h, ...rest] = translated.text.split("\n\n");
-          headline = h ?? headline;
-          summary = rest.join("\n\n") || summary;
-        } else {
-          await supabaseAdmin.from("translation_failures").insert({
-            dedup_key: item.dedup_key,
-            headline: item.headline,
-            target_language: "ckb",
-            models_tried: translated.modelsTried,
-            detail: translated.detail ?? null,
-          });
+        if (!translationCache.has("ckb")) {
+          const translated = await translateToSorani(`${headline}\n\n${summary}`);
+          if (translated.text) {
+            const [h, ...rest] = translated.text.split("\n\n");
+            translationCache.set("ckb", {
+              headline: h ?? headline,
+              summary: rest.join("\n\n") || summary,
+            });
+          } else {
+            // Fall back to the English text rather than skipping the post.
+            translationCache.set("ckb", null);
+            await supabaseAdmin.from("translation_failures").insert({
+              dedup_key: item.dedup_key,
+              headline: item.headline,
+              target_language: "ckb",
+              models_tried: translated.modelsTried,
+              detail: translated.detail ?? null,
+            });
+          }
+        }
+        const cached = translationCache.get("ckb");
+        if (cached) {
+          headline = cached.headline;
+          summary = cached.summary;
         }
       }
+
 
       const post: OutgoingPost = {
         headline,
