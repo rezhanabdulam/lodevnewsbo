@@ -62,19 +62,11 @@ function tag(block: string, name: string): string | null {
   return m?.[1] ? decodeEntities(m[1]) : null;
 }
 
-/** Google News RSS — free fallback. Rarely provides images. */
-export async function fetchGoogleNewsRss(
-  query: string,
-): Promise<FetchedArticle[]> {
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(
-    query,
-  )}&hl=en-US&gl=US&ceid=US:en`;
-  const res = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0 (compatible; NewsBot/1.0)" },
-  });
-  if (!res.ok) throw new Error(`Google News RSS ${res.status}`);
-  const xml = await res.text();
-
+function parseRssItems(
+  xml: string,
+  provider: string,
+  fallbackSource: string | null,
+): FetchedArticle[] {
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
   return items
     .map((block): FetchedArticle | null => {
@@ -82,8 +74,8 @@ export async function fetchGoogleNewsRss(
       const link = tag(block, "link");
       if (!title || !link) return null;
       return {
-        provider: "Google News RSS",
-        sourceName: tag(block, "source"),
+        provider,
+        sourceName: tag(block, "source") ?? fallbackSource,
         url: link,
         title,
         description: tag(block, "description"),
@@ -93,3 +85,59 @@ export async function fetchGoogleNewsRss(
     })
     .filter((a): a is FetchedArticle => a !== null);
 }
+
+const RSS_HEADERS = {
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  accept: "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+};
+
+/** Google News RSS — free, but frequently 503s from datacenter IPs. */
+export async function fetchGoogleNewsRss(
+  query: string,
+): Promise<FetchedArticle[]> {
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(
+    query,
+  )}&hl=en-US&gl=US&ceid=US:en`;
+  const res = await fetch(url, { headers: RSS_HEADERS });
+  if (!res.ok) throw new Error(`Google News RSS ${res.status}`);
+  return parseRssItems(await res.text(), "Google News RSS", null);
+}
+
+/** Bing News RSS — free query-based fallback that datacenter IPs can reach. */
+export async function fetchBingNewsRss(
+  query: string,
+): Promise<FetchedArticle[]> {
+  const url = `https://www.bing.com/news/search?q=${encodeURIComponent(
+    query,
+  )}&format=RSS&setmkt=en-US&setlang=en-US`;
+  const res = await fetch(url, { headers: RSS_HEADERS });
+  if (!res.ok) throw new Error(`Bing News RSS ${res.status}`);
+  return parseRssItems(await res.text(), "Bing News RSS", null);
+}
+
+/** Al Jazeera all-news RSS — no query support, used as a topical safety net. */
+export async function fetchAlJazeeraRss(): Promise<FetchedArticle[]> {
+  const res = await fetch("https://www.aljazeera.com/xml/rss/all.xml", {
+    headers: RSS_HEADERS,
+  });
+  if (!res.ok) throw new Error(`Al Jazeera RSS ${res.status}`);
+  return parseRssItems(await res.text(), "Al Jazeera RSS", "Al Jazeera");
+}
+
+/** Tries every free RSS search provider until one returns results. */
+export async function fetchRssSearch(query: string): Promise<FetchedArticle[]> {
+  const errors: string[] = [];
+  for (const fn of [fetchBingNewsRss, fetchGoogleNewsRss]) {
+    try {
+      const items = await fn(query);
+      if (items.length > 0) return items;
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  if (errors.length === 2) throw new Error(errors.join(" | "));
+  return [];
+}
+
