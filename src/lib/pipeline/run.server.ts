@@ -247,13 +247,14 @@ export async function runIngest(): Promise<IngestStats> {
 
     let headline = article.title;
     let summary = article.description ?? "";
-    try {
-      if (aiDown) throw new Error("AI unavailable; using original text");
-      const out = await rewrite(article);
-      headline = out.headline;
-      summary = out.summary;
-    } catch (err) {
-      stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
+    if (!aiDown) {
+      try {
+        const out = await rewrite(article);
+        headline = out.headline;
+        summary = out.summary;
+      } catch (err) {
+        stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     const { data: inserted } = await supabaseAdmin
