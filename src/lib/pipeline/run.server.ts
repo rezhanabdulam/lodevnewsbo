@@ -427,6 +427,14 @@ export async function runPublish(
     return result;
   }
 
+  // Anything that sat in the queue past its shelf life is dropped, never posted.
+  const shelfLife = new Date(Date.now() - 14 * 3_600_000).toISOString();
+  await supabaseAdmin
+    .from("queue")
+    .update({ status: "expired" })
+    .eq("status", "queued")
+    .lt("original_published_at", shelfLife);
+
   const limit = opts.force ?? 1;
   let query = supabaseAdmin
     .from("queue")
@@ -434,7 +442,9 @@ export async function runPublish(
     .eq("status", "queued")
     .order("breaking", { ascending: false })
     .order("score", { ascending: false })
+    .order("original_published_at", { ascending: false })
     .limit(limit);
+
   if (opts.breakingOnly) query = query.eq("breaking", true);
 
   const { data: items } = await query;
