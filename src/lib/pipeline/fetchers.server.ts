@@ -93,16 +93,27 @@ const RSS_HEADERS = {
   "accept-language": "en-US,en;q=0.9",
 };
 
-/** Google News RSS — free, but frequently 503s from datacenter IPs. */
+/**
+ * Google News RSS — free, but consistently 503s from datacenter IPs.
+ * Kept as a last-resort fallback behind the mirrors below.
+ */
 export async function fetchGoogleNewsRss(
   query: string,
 ): Promise<FetchedArticle[]> {
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(
-    query,
-  )}&hl=en-US&gl=US&ceid=US:en`;
-  const res = await fetch(url, { headers: RSS_HEADERS });
-  if (!res.ok) throw new Error(`Google News RSS ${res.status}`);
-  return parseRssItems(await res.text(), "Google News RSS", null);
+  const bases = [
+    "https://news.google.com/rss/search",
+    "https://news.google.com/news/rss/search",
+  ];
+  let lastStatus = 0;
+  for (const base of bases) {
+    const url = `${base}?q=${encodeURIComponent(
+      query,
+    )}+when:1d&hl=en-US&gl=US&ceid=US:en`;
+    const res = await fetch(url, { headers: RSS_HEADERS }).catch(() => null);
+    if (res?.ok) return parseRssItems(await res.text(), "Google News RSS", null);
+    lastStatus = res?.status ?? 0;
+  }
+  throw new Error(`Google News RSS ${lastStatus || "unreachable"}`);
 }
 
 /** Bing News RSS — free query-based fallback that datacenter IPs can reach. */
@@ -111,19 +122,47 @@ export async function fetchBingNewsRss(
 ): Promise<FetchedArticle[]> {
   const url = `https://www.bing.com/news/search?q=${encodeURIComponent(
     query,
-  )}&format=RSS&setmkt=en-US&setlang=en-US`;
+  )}&format=RSS&setmkt=en-US&setlang=en-US&qft=interval%3d"7"`;
   const res = await fetch(url, { headers: RSS_HEADERS });
   if (!res.ok) throw new Error(`Bing News RSS ${res.status}`);
   return parseRssItems(await res.text(), "Bing News RSS", null);
 }
 
-/** Al Jazeera all-news RSS — no query support, used as a topical safety net. */
+/** Direct publisher feeds — always reachable, always fresh, no query support. */
+export const PUBLISHER_FEEDS: Array<{ name: string; url: string }> = [
+  { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml" },
+  { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml" },
+  { name: "The Guardian World", url: "https://www.theguardian.com/world/rss" },
+  { name: "Times of Israel", url: "https://www.timesofisrael.com/feed/" },
+  { name: "Al Arabiya", url: "https://english.alarabiya.net/tools/rss" },
+  { name: "Rudaw", url: "https://www.rudaw.net/rss/english" },
+  { name: "Shafaq News", url: "https://shafaq.com/en/rss" },
+  { name: "Press TV", url: "https://www.presstv.ir/rss.xml" },
+  { name: "Middle East Eye", url: "https://www.middleeasteye.net/rss" },
+  { name: "Defense News Mideast", url: "https://www.defensenews.com/arc/outboundfeeds/rss/category/mideast-africa/?outputType=xml" },
+  { name: "OilPrice.com", url: "https://oilprice.com/rss/main" },
+  { name: "CNBC Energy", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19836768" },
+];
+
+/** Fetches every publisher feed in parallel; failures are ignored per feed. */
+export async function fetchPublisherFeeds(): Promise<FetchedArticle[]> {
+  const results = await Promise.all(
+    PUBLISHER_FEEDS.map(async (feed) => {
+      try {
+        const res = await fetch(feed.url, { headers: RSS_HEADERS });
+        if (!res.ok) return [];
+        return parseRssItems(await res.text(), `${feed.name} RSS`, feed.name);
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return results.flat();
+}
+
+/** Back-compat alias used by the ingest runner. */
 export async function fetchAlJazeeraRss(): Promise<FetchedArticle[]> {
-  const res = await fetch("https://www.aljazeera.com/xml/rss/all.xml", {
-    headers: RSS_HEADERS,
-  });
-  if (!res.ok) throw new Error(`Al Jazeera RSS ${res.status}`);
-  return parseRssItems(await res.text(), "Al Jazeera RSS", "Al Jazeera");
+  return fetchPublisherFeeds();
 }
 
 /** Tries every free RSS search provider until one returns results. */
@@ -140,4 +179,5 @@ export async function fetchRssSearch(query: string): Promise<FetchedArticle[]> {
   if (errors.length === 2) throw new Error(errors.join(" | "));
   return [];
 }
+
 
