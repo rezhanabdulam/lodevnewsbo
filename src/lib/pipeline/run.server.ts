@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { fetchAlJazeeraRss, fetchRssSearch, fetchNewsData } from "./fetchers.server";
+import { fetchPublisherFeeds, fetchRssSearch, fetchNewsData } from "./fetchers.server";
 import {
   canonicalKey,
   freshnessGate,
