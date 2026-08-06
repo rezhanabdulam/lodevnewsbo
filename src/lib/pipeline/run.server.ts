@@ -187,8 +187,9 @@ export async function runIngest(): Promise<IngestStats> {
   const fresh = survivors.filter((s) => !known.has(s.key));
   stats.duplicate += survivors.length - fresh.length;
 
-  // GATE 3 — semantic classification
+  // GATE 3 — semantic classification (keyword fallback when the AI is unavailable)
   let categories: Array<Category | null> = [];
+  let aiDown = false;
   if (fresh.length) {
     const batch = fresh.slice(0, 60);
     try {
@@ -197,9 +198,13 @@ export async function runIngest(): Promise<IngestStats> {
       );
     } catch (err) {
       stats.errors.push(`classification: ${err instanceof Error ? err.message : String(err)}`);
-      categories = [];
+      aiDown = true;
+      categories = batch.map((s) =>
+        keywordCategory(`${s.article.title} ${s.article.description ?? ""}`),
+      );
     }
   }
+
 
   // rolling window of recent titles for cross-provider dedup
   const { data: recent } = await supabaseAdmin
