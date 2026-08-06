@@ -115,15 +115,15 @@ export async function runIngest(): Promise<IngestStats> {
             collected.push(...(await fetchRssSearch(query)));
           } catch (err) {
             stats.errors.push(
-              `rss / ${query}: ${err instanceof Error ? err.message : String(err)}`,
+              `rss / ${query.slice(0, 40)}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
         }
         try {
           const topical =
-            /iran|tehran|israel|hezbollah|houthi|yemen|iraq|militia|hormuz|oil|gold|nuclear|trump|khamenei|idf|strike/i;
+            /iran|tehran|irgc|khamenei|israel|hezbollah|houthi|yemen|iraq|syria|lebanon|militia|hormuz|persian gulf|tanker|oil|gold|nuclear|uranium|enrich|iaea|sanction|trump|pentagon|centcom|us navy|missile|drone|airstrike|strike|ceasefire|nato|mossad/i;
           collected.push(
-            ...(await fetchAlJazeeraRss()).filter((a) =>
+            ...(await fetchPublisherFeeds()).filter((a) =>
               topical.test(`${a.title} ${a.description ?? ""}`),
             ),
           );
@@ -132,6 +132,7 @@ export async function runIngest(): Promise<IngestStats> {
         }
 
       }
+
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stats.errors.push(`${source.name}: ${msg}`);
