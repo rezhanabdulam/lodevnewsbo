@@ -1,5 +1,8 @@
 export type Category =
+  | "iraq"
   | "iran"
+  | "middle-east"
+  | "analysis"
   | "oil"
   | "war"
   | "gold"
@@ -8,8 +11,11 @@ export type Category =
   | "economic-impact";
 
 export const CATEGORIES: Category[] = [
+  "iraq",
   "war",
   "iran",
+  "middle-east",
+  "analysis",
   "proxies",
   "gold",
   "usa",
@@ -18,8 +24,11 @@ export const CATEGORIES: Category[] = [
 ];
 
 export const CATEGORY_PRIORITY: Record<Category, number> = {
+  iraq: 70,
   war: 60,
   iran: 50,
+  "middle-east": 42,
+  analysis: 34,
   proxies: 45,
   gold: 30,
   usa: 30,

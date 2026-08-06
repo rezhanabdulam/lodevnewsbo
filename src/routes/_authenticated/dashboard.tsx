@@ -42,7 +42,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
   component: Dashboard,
 });
 
-const CATEGORIES = ["war", "iran", "proxies", "gold", "usa", "oil", "economic-impact"];
+const CATEGORIES = ["iraq", "war", "iran", "middle-east", "analysis", "proxies", "gold", "usa", "oil", "economic-impact"];
 
 function Panel({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -184,7 +184,6 @@ function Dashboard() {
               data.queue.map((q: any) => (
                 <div key={q.id} className="rounded-md border border-border p-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    {q.breaking ? <Badge variant="destructive">BREAKING</Badge> : null}
                     <Badge variant="secondary">{q.category}</Badge>
                     <span className="text-xs text-muted-foreground">score {Math.round(q.score)}</span>
                     <span className="text-xs text-muted-foreground">· {q.source_name}</span>
