@@ -151,12 +151,12 @@ export async function runIngest(): Promise<IngestStats> {
   const seenKeys = new Set<string>();
 
   for (const article of collected) {
+    article.title = cleanEditorialText(article.title);
+    article.description = article.description ? cleanEditorialText(article.description) : null;
     const key = canonicalKey(article);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
 
-    article.title = cleanEditorialText(article.title);
-    article.description = article.description ? cleanEditorialText(article.description) : null;
     const junk = junkGate(article);
     if (!junk.ok) {
       stats.junk += 1;
@@ -514,7 +514,6 @@ export async function runPublish(
   const { data: chats } = await supabaseAdmin.from("chats").select("*").eq("active", true);
   result.chats = (chats ?? []).length;
 
-  const eightHoursAgo = new Date(Date.now() - 8 * 3_600_000).toISOString();
   const twoDaysAgo = new Date(Date.now() - 48 * 3_600_000).toISOString();
 
   // Context dedup: headlines already sent recently, to avoid re-posting the same event.
