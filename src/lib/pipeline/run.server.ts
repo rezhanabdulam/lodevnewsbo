@@ -165,7 +165,7 @@ export async function runIngest(): Promise<IngestStats> {
       rejects.push(rejectRow(article, key, respect.reason!));
       continue;
     }
-    const fresh = freshnessGate(article);
+    const fresh = freshnessGate(article, 10);
     if (!fresh.ok) {
       stats.stale += 1;
       rejects.push(rejectRow(article, key, fresh.reason!));
@@ -338,7 +338,7 @@ async function scoreParts(category: Category, publishedAt: string | null, breaki
   const ageHours = publishedAt
     ? Math.max(0, (Date.now() - Date.parse(publishedAt)) / 3_600_000)
     : 24;
-  const freshness = Math.max(0, 20 - ageHours);
+  const freshness = Math.max(0, 60 - ageHours * 5);
 
   const sinceHour = new Date(Date.now() - 3_600_000).toISOString();
   const { count: postedThisHour } = await supabaseAdmin
@@ -546,7 +546,7 @@ export async function runPublish(
         publishedTitles.unshift(item.headline);
         publishedKeys.add(item.dedup_key);
 
-        await new Promise((r) => setTimeout(r, 60_000));
+        await new Promise((r) => setTimeout(r, 3_000));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (/chat not found|bot was kicked|blocked/i.test(msg)) {
