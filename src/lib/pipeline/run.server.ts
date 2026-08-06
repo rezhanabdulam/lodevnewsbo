@@ -80,7 +80,7 @@ export async function runIngest(): Promise<IngestStats> {
     }
   }
   if (current) groups.push(current);
-  const newsDataGroups = groups.slice(0, 3);
+  const newsDataGroups = groups.slice(0, 2);
 
   const today = new Date().toISOString().slice(0, 10);
 
