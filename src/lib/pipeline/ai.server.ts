@@ -45,6 +45,9 @@ function extractJson(text: string): unknown {
 }
 
 const CATEGORY_GUIDE = `
+- iraq: major Iraqi security, politics, diplomacy, energy, economy, Kurdistan Region, or regional developments with a direct impact on Iraq.
+- middle-east: major regional developments in Israel/Palestine, Lebanon, Syria, Yemen, Saudi Arabia, the Gulf or Turkey that matter to a Middle Eastern audience.
+- analysis: substantive geopolitical or military analysis about Iran, Iraq, the Iran-US confrontation, or the wider Middle East.
 - war: military strikes, attacks, casualties, mobilisation, or direct armed confrontation involving Iran, the US, Israel or their allies.
 - iran: Iranian politics, leadership statements, nuclear programme, sanctions, internal affairs, Iran's regional diplomacy.
 - proxies: Hezbollah, the Houthis, Iraqi militias, other Iran-aligned armed groups, and Israel-related conflict news.
@@ -52,7 +55,7 @@ const CATEGORY_GUIDE = `
 - oil: crude oil prices, supply, shipping, the Strait of Hormuz, OPEC.
 - gold: gold and precious-metal prices and safe-haven flows.
 - economic-impact: other market, currency, trade or inflation effects of the conflict.
-Return "none" for anything unrelated to the Iran-US conflict and its regional/economic effects (video games, sports, entertainment, generic finance).`;
+Return "none" for minor local stories, video games, sports, entertainment, generic finance, foreign domestic politics without regional impact, and India-only gold retail prices.`;
 
 /** GATE 3 — semantic classification (never plain keyword matching). */
 export async function classifyBatch(
@@ -66,7 +69,7 @@ export async function classifyBatch(
   const raw = await chat("openai/gpt-5.6-sol", [
     {
       role: "system",
-      content: `You classify news articles for a bot covering the Iran-US conflict and its effects. Categories:${CATEGORY_GUIDE}
+      content: `You classify English-language news for an Iraqi audience covering Iraq first, Iran and Iranian perspectives, the Iran-US conflict, and major Middle East events. Categories:${CATEGORY_GUIDE}
 Judge meaning, not keywords: a "God of War" game article is "none", not war.
 Reply with ONLY a JSON array of strings, one per numbered item, in order.`,
     },
@@ -101,7 +104,12 @@ Rules:
 - Pull the key figure, number or quote INTO the summary sentences, never trailing at the end.
 - Never end mid-sentence and never use an ellipsis.
 - If a claim comes from one side (a government, military spokesperson or state media) and is not independently confirmed, keep the attribution inside the sentence: "Iran says...", "Israel says...", "the Pentagon says...".
-- Report the story regardless of which side it favours or embarrasses.`,
+- Report the story regardless of which side it favours or embarrasses.
+- Remove labels such as "live update", "live blog", "breaking", and "Iran-US live".
+- Write professional English only. Never output HTML, markdown, feed boilerplate, social embeds, or another language.
+- Prioritise implications for Iraq, Iran and the region when supported by the supplied facts.
+- Iranian perspectives are welcome, but clearly attribute claims and never present unverified claims as facts.
+- For oil or gold, use globally meaningful USD benchmarks and regional implications; omit India-only retail prices.`,
     },
     {
       role: "user",

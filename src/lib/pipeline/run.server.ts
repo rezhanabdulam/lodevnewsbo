@@ -2,11 +2,13 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { fetchPublisherFeeds, fetchRssSearch, fetchNewsData } from "./fetchers.server";
 import {
   canonicalKey,
+  cleanEditorialText,
+  englishGate,
   freshnessGate,
   junkGate,
   respectGate,
   sourceTrust,
-  titleSimilarity,
+  sameEvent,
 } from "./filters.server";
 import {
   classifyBatch,
@@ -153,6 +155,8 @@ export async function runIngest(): Promise<IngestStats> {
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
 
+    article.title = cleanEditorialText(article.title);
+    article.description = article.description ? cleanEditorialText(article.description) : null;
     const junk = junkGate(article);
     if (!junk.ok) {
       stats.junk += 1;
@@ -163,6 +167,12 @@ export async function runIngest(): Promise<IngestStats> {
     if (!respect.ok) {
       stats.disrespect += 1;
       rejects.push(rejectRow(article, key, respect.reason!));
+      continue;
+    }
+    const english = englishGate(article);
+    if (!english.ok) {
+      stats.junk += 1;
+      rejects.push(rejectRow(article, key, english.reason!));
       continue;
     }
     const fresh = freshnessGate(article, 10);
@@ -233,7 +243,7 @@ export async function runIngest(): Promise<IngestStats> {
     }
 
     const trust = sourceTrust(article.sourceName, article.url);
-    const collision = window.find((w) => titleSimilarity(w.title, article.title) >= 0.62);
+    const collision = window.find((w) => sameEvent(w.title, article.title));
     if (collision) {
       if (trust < collision.trust) {
         // higher-trust source wins: replace the queued item
@@ -313,11 +323,16 @@ export async function runIngest(): Promise<IngestStats> {
 /** Offline classifier used when the AI gateway is unavailable. */
 function keywordCategory(text: string): Category | null {
   const t = text.toLowerCase();
+  if (/\biraq|baghdad|basra|mosul|kurdistan region|erbil|sulaymaniyah|iraqi\b/.test(t)) return "iraq";
+  if (/\bmiddle east eye\b/.test(t) && /analysis|explainer|opinion|why |how /.test(t)) return "analysis";
   const iranRelated =
     /iran|tehran|irgc|khamenei|persian gulf|hormuz|hezbollah|houthi|kataib|axis of resistance/.test(
       t,
     );
-  if (!iranRelated) return null;
+  if (!iranRelated) {
+    if (/israel|palestin|gaza|lebanon|syria|yemen|saudi|qatar|uae|turkey/.test(t)) return "middle-east";
+    return null;
+  }
   if (/hezbollah|houthi|kataib|militia|hamas|axis of resistance/.test(t)) return "proxies";
   if (/strike|missile|drone|attack|airstrike|war|bomb|troops|centcom|carrier|explosion/.test(t))
     return "war";
@@ -452,6 +467,24 @@ export async function runPublish(
     return result;
   }
 
+  // Reserve the next slot before network calls so overlapping cron runs cannot
+  // enter the same cadence window.
+  if (!opts.force && !opts.breakingOnly) {
+    const gap = randomGapMinutes(settings, night);
+    const reservedUntil = new Date(Date.now() + gap * 60_000).toISOString();
+    const { data: reserved } = await supabaseAdmin
+      .from("settings")
+      .update({ next_publish_at: reservedUntil })
+      .eq("id", 1)
+      .or(`next_publish_at.is.null,next_publish_at.lte.${new Date().toISOString()}`)
+      .select("id")
+      .maybeSingle();
+    if (!reserved) {
+      result.skipped = "another publisher reserved this scheduled slot";
+      return result;
+    }
+  }
+
   // Anything that sat in the queue past its shelf life is dropped, never posted.
   const shelfLife = new Date(Date.now() - 14 * 3_600_000).toISOString();
   await supabaseAdmin
@@ -487,7 +520,7 @@ export async function runPublish(
   // Context dedup: headlines already sent recently, to avoid re-posting the same event.
   const { data: recentPublished } = await supabaseAdmin
     .from("published_history")
-    .select("headline, dedup_key")
+    .select("headline, dedup_key, chat_id")
     .gte("published_at", twoDaysAgo)
     .order("published_at", { ascending: false })
     .limit(200);
@@ -497,12 +530,15 @@ export async function runPublish(
   const publishedKeys = new Set<string>(
     (recentPublished ?? []).map((r: any) => r.dedup_key),
   );
+  const sentToChat = new Set(
+    (recentPublished ?? []).map((row: any) => `${row.dedup_key}:${row.chat_id}`),
+  );
 
   for (const item of items as any[]) {
     // Same event already covered? mark and skip without sending.
     const repeated =
       publishedKeys.has(item.dedup_key) ||
-      publishedTitles.some((t) => titleSimilarity(t, item.headline) >= 0.6);
+      publishedTitles.some((t) => sameEvent(t, `${item.headline} ${item.summary}`));
     if (repeated) {
       await supabaseAdmin.from("queue").update({ status: "duplicate" }).eq("id", item.id);
       continue;
@@ -512,14 +548,7 @@ export async function runPublish(
     const translationCache = new Map<string, { headline: string; summary: string } | null>();
 
     for (const chat of (chats ?? []) as any[]) {
-      const { data: already } = await supabaseAdmin
-        .from("published_history")
-        .select("id")
-        .eq("dedup_key", item.dedup_key)
-        .eq("chat_id", chat.chat_id)
-        .gte("published_at", eightHoursAgo)
-        .limit(1);
-      if ((already ?? []).length > 0) continue;
+      if (sentToChat.has(`${item.dedup_key}:${chat.chat_id}`)) continue;
 
       const language = chat.language ?? settings["default_language"] ?? "en";
       let headline = item.headline as string;
@@ -580,6 +609,7 @@ export async function runPublish(
         result.sent += 1;
         publishedTitles.unshift(item.headline);
         publishedKeys.add(item.dedup_key);
+        sentToChat.add(`${item.dedup_key}:${chat.chat_id}`);
 
         await new Promise((r) => setTimeout(r, 3_000));
       } catch (err) {
@@ -598,12 +628,10 @@ export async function runPublish(
   }
 
   if (!opts.breakingOnly) {
-    const gap = randomGapMinutes(settings, isNight(settings));
     await supabaseAdmin
       .from("settings")
       .update({
         last_published_at: new Date().toISOString(),
-        next_publish_at: new Date(Date.now() + gap * 60_000).toISOString(),
       })
       .eq("id", 1);
   }
