@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { fetchAlJazeeraRss, fetchRssSearch, fetchNewsData } from "./fetchers.server";
+import { fetchPublisherFeeds, fetchRssSearch, fetchNewsData } from "./fetchers.server";
 import {
   canonicalKey,
   freshnessGate,
@@ -80,7 +80,7 @@ export async function runIngest(): Promise<IngestStats> {
     }
   }
   if (current) groups.push(current);
-  const newsDataGroups = groups.slice(0, 3);
+  const newsDataGroups = groups.slice(0, 2);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -115,15 +115,15 @@ export async function runIngest(): Promise<IngestStats> {
             collected.push(...(await fetchRssSearch(query)));
           } catch (err) {
             stats.errors.push(
-              `rss / ${query}: ${err instanceof Error ? err.message : String(err)}`,
+              `rss / ${query.slice(0, 40)}: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
         }
         try {
           const topical =
-            /iran|tehran|israel|hezbollah|houthi|yemen|iraq|militia|hormuz|oil|gold|nuclear|trump|khamenei|idf|strike/i;
+            /iran|tehran|irgc|khamenei|israel|hezbollah|houthi|yemen|iraq|syria|lebanon|militia|hormuz|persian gulf|tanker|oil|gold|nuclear|uranium|enrich|iaea|sanction|trump|pentagon|centcom|us navy|missile|drone|airstrike|strike|ceasefire|nato|mossad/i;
           collected.push(
-            ...(await fetchAlJazeeraRss()).filter((a) =>
+            ...(await fetchPublisherFeeds()).filter((a) =>
               topical.test(`${a.title} ${a.description ?? ""}`),
             ),
           );
@@ -132,6 +132,7 @@ export async function runIngest(): Promise<IngestStats> {
         }
 
       }
+
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       stats.errors.push(`${source.name}: ${msg}`);
@@ -164,7 +165,7 @@ export async function runIngest(): Promise<IngestStats> {
       rejects.push(rejectRow(article, key, respect.reason!));
       continue;
     }
-    const fresh = freshnessGate(article);
+    const fresh = freshnessGate(article, 10);
     if (!fresh.ok) {
       stats.stale += 1;
       rejects.push(rejectRow(article, key, fresh.reason!));
@@ -186,8 +187,9 @@ export async function runIngest(): Promise<IngestStats> {
   const fresh = survivors.filter((s) => !known.has(s.key));
   stats.duplicate += survivors.length - fresh.length;
 
-  // GATE 3 — semantic classification
+  // GATE 3 — semantic classification (keyword fallback when the AI is unavailable)
   let categories: Array<Category | null> = [];
+  let aiDown = false;
   if (fresh.length) {
     const batch = fresh.slice(0, 60);
     try {
@@ -196,9 +198,13 @@ export async function runIngest(): Promise<IngestStats> {
       );
     } catch (err) {
       stats.errors.push(`classification: ${err instanceof Error ? err.message : String(err)}`);
-      categories = [];
+      aiDown = true;
+      categories = batch.map((s) =>
+        keywordCategory(`${s.article.title} ${s.article.description ?? ""}`),
+      );
     }
   }
+
 
   // rolling window of recent titles for cross-provider dedup
   const { data: recent } = await supabaseAdmin
@@ -241,12 +247,14 @@ export async function runIngest(): Promise<IngestStats> {
 
     let headline = article.title;
     let summary = article.description ?? "";
-    try {
-      const out = await rewrite(article);
-      headline = out.headline;
-      summary = out.summary;
-    } catch (err) {
-      stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
+    if (!aiDown) {
+      try {
+        const out = await rewrite(article);
+        headline = out.headline;
+        summary = out.summary;
+      } catch (err) {
+        stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     const { data: inserted } = await supabaseAdmin
@@ -302,6 +310,24 @@ export async function runIngest(): Promise<IngestStats> {
   return stats;
 }
 
+/** Offline classifier used when the AI gateway is unavailable. */
+function keywordCategory(text: string): Category | null {
+  const t = text.toLowerCase();
+  const iranRelated =
+    /iran|tehran|irgc|khamenei|persian gulf|hormuz|hezbollah|houthi|kataib|axis of resistance/.test(
+      t,
+    );
+  if (!iranRelated) return null;
+  if (/hezbollah|houthi|kataib|militia|hamas|axis of resistance/.test(t)) return "proxies";
+  if (/strike|missile|drone|attack|airstrike|war|bomb|troops|centcom|carrier|explosion/.test(t))
+    return "war";
+  if (/oil|crude|opec|tanker|hormuz|refinery|barrel/.test(t)) return "oil";
+  if (/gold|bullion/.test(t)) return "gold";
+  if (/sanction|inflation|market|economy|export/.test(t)) return "economic-impact";
+  if (/trump|pentagon|washington|white house|congress|u\.s\.|united states/.test(t)) return "usa";
+  return "iran";
+}
+
 function hostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -337,7 +363,7 @@ async function scoreParts(category: Category, publishedAt: string | null, breaki
   const ageHours = publishedAt
     ? Math.max(0, (Date.now() - Date.parse(publishedAt)) / 3_600_000)
     : 24;
-  const freshness = Math.max(0, 20 - ageHours);
+  const freshness = Math.max(0, 60 - ageHours * 5);
 
   const sinceHour = new Date(Date.now() - 3_600_000).toISOString();
   const { count: postedThisHour } = await supabaseAdmin
@@ -426,6 +452,14 @@ export async function runPublish(
     return result;
   }
 
+  // Anything that sat in the queue past its shelf life is dropped, never posted.
+  const shelfLife = new Date(Date.now() - 14 * 3_600_000).toISOString();
+  await supabaseAdmin
+    .from("queue")
+    .update({ status: "expired" })
+    .eq("status", "queued")
+    .lt("original_published_at", shelfLife);
+
   const limit = opts.force ?? 1;
   let query = supabaseAdmin
     .from("queue")
@@ -433,7 +467,9 @@ export async function runPublish(
     .eq("status", "queued")
     .order("breaking", { ascending: false })
     .order("score", { ascending: false })
+    .order("original_published_at", { ascending: false })
     .limit(limit);
+
   if (opts.breakingOnly) query = query.eq("breaking", true);
 
   const { data: items } = await query;
@@ -545,7 +581,7 @@ export async function runPublish(
         publishedTitles.unshift(item.headline);
         publishedKeys.add(item.dedup_key);
 
-        await new Promise((r) => setTimeout(r, 60_000));
+        await new Promise((r) => setTimeout(r, 3_000));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (/chat not found|bot was kicked|blocked/i.test(msg)) {
