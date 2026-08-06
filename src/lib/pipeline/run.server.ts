@@ -248,6 +248,7 @@ export async function runIngest(): Promise<IngestStats> {
     let headline = article.title;
     let summary = article.description ?? "";
     try {
+      if (aiDown) throw new Error("AI unavailable; using original text");
       const out = await rewrite(article);
       headline = out.headline;
       summary = out.summary;
@@ -306,6 +307,24 @@ export async function runIngest(): Promise<IngestStats> {
   if (stats.breaking > 0) await runPublish({ breakingOnly: true });
 
   return stats;
+}
+
+/** Offline classifier used when the AI gateway is unavailable. */
+function keywordCategory(text: string): Category | null {
+  const t = text.toLowerCase();
+  const iranRelated =
+    /iran|tehran|irgc|khamenei|persian gulf|hormuz|hezbollah|houthi|kataib|axis of resistance/.test(
+      t,
+    );
+  if (!iranRelated) return null;
+  if (/hezbollah|houthi|kataib|militia|hamas|axis of resistance/.test(t)) return "proxies";
+  if (/strike|missile|drone|attack|airstrike|war|bomb|troops|centcom|carrier|explosion/.test(t))
+    return "war";
+  if (/oil|crude|opec|tanker|hormuz|refinery|barrel/.test(t)) return "oil";
+  if (/gold|bullion/.test(t)) return "gold";
+  if (/sanction|inflation|market|economy|export/.test(t)) return "economic-impact";
+  if (/trump|pentagon|washington|white house|congress|u\.s\.|united states/.test(t)) return "usa";
+  return "iran";
 }
 
 function hostname(url: string): string {
