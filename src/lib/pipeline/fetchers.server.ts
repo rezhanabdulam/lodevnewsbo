@@ -51,7 +51,7 @@ function decodeEntities(input: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, " ")
+    .replace(/&(?:amp;)?nbsp;|&#160;/gi, " ")
     .replace(/&amp;/g, "&")
     .replace(/<[^>]+>/g, "")
     .trim();
@@ -138,6 +138,8 @@ export const PUBLISHER_FEEDS: Array<{ name: string; url: string }> = [
   { name: "Rudaw", url: "https://www.rudaw.net/rss/english" },
   { name: "Shafaq News", url: "https://shafaq.com/en/rss" },
   { name: "Press TV", url: "https://www.presstv.ir/rss.xml" },
+  { name: "Mehr News", url: "https://en.mehrnews.com/rss" },
+  { name: "Tehran Times", url: "https://www.tehrantimes.com/rss" },
   { name: "Middle East Eye", url: "https://www.middleeasteye.net/rss" },
   { name: "Defense News Mideast", url: "https://www.defensenews.com/arc/outboundfeeds/rss/category/mideast-africa/?outputType=xml" },
   { name: "OilPrice.com", url: "https://oilprice.com/rss/main" },
@@ -168,7 +170,9 @@ export async function fetchAlJazeeraRss(): Promise<FetchedArticle[]> {
 /** Tries every free RSS search provider until one returns results. */
 export async function fetchRssSearch(query: string): Promise<FetchedArticle[]> {
   const errors: string[] = [];
-  for (const fn of [fetchBingNewsRss, fetchGoogleNewsRss]) {
+  // Google News rejects server IPs with 503. Do not waste calls retrying it;
+  // Bing plus direct publisher feeds provide the reliable server-side path.
+  for (const fn of [fetchBingNewsRss]) {
     try {
       const items = await fn(query);
       if (items.length > 0) return items;
@@ -176,7 +180,7 @@ export async function fetchRssSearch(query: string): Promise<FetchedArticle[]> {
       errors.push(err instanceof Error ? err.message : String(err));
     }
   }
-  if (errors.length === 2) throw new Error(errors.join(" | "));
+  if (errors.length) throw new Error(errors.join(" | "));
   return [];
 }
 

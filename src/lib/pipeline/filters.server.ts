@@ -26,6 +26,7 @@ export const JUNK_TITLE_PATTERNS: RegExp[] = [
   /\bcrossword|wordle\b/i,
   /\bgiveaway|sweepstake\b/i,
   /\bwatch (live|online) free\b/i,
+  /\b(live updates?|live blog|as it happened)\b/i,
 ];
 
 /** Slurs / dehumanising phrasing aimed at Kurds or Muslims. */
@@ -74,6 +75,23 @@ export function respectGate(article: FetchedArticle): GateResult {
   return { ok: true };
 }
 
+const NON_LATIN_SCRIPT = /[\u0900-\u097F\u0980-\u09FF\u0A00-\u0D7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
+const ENGLISH_MARKERS = new Set(
+  "the a an and or but of to in on for from with by as at is are was were has have had will would could should says said after before over into amid about against its their his her this that these those new more not no under during between".split(" "),
+);
+
+export function englishGate(article: FetchedArticle): GateResult {
+  const text = `${article.title} ${article.description ?? ""}`.replace(/https?:\/\/\S+/g, " ");
+  if (NON_LATIN_SCRIPT.test(text)) return { ok: false, reason: "non-English script" };
+  const words = text.toLowerCase().match(/[a-z]+/g) ?? [];
+  if (words.length < 4) return { ok: false, reason: "insufficient English text" };
+  const markers = words.filter((word) => ENGLISH_MARKERS.has(word)).length;
+  if (markers < 2 && markers / words.length < 0.08) {
+    return { ok: false, reason: "language is not confidently English" };
+  }
+  return { ok: true };
+}
+
 /** GATE 4 — freshness (24h). */
 export function freshnessGate(
   article: FetchedArticle,
@@ -114,7 +132,7 @@ export function normalizeTitle(title: string): string {
 }
 
 const STOPWORDS = new Set(
-  "the a an of in on at to for and or with by from as is are was were be been says said after over into amid new".split(
+  "the a an of in on at to for and or with by from as is are was were be been says said after over into amid new live update updates latest breaking report reports could would should about against their his her its denies say thought".split(
     " ",
   ),
 );
@@ -158,9 +176,63 @@ export function titleSimilarity(a: string, b: string): number {
   return shared / (sa.size + sb.size - shared);
 }
 
+const EVENT_ALIASES: Array<[RegExp, string]> = [
+  [/\b(united states|u\.s\.|us|america|american)\b/gi, "usa"],
+  [/\b(donald trump|president trump|trump)\b/gi, "trump"],
+  [/\b(pete hegseth|hegseth)\b/gi, "hegseth"],
+  [/\b(islamic revolutionary guard corps|revolutionary guards?|irgc)\b/gi, "irgc"],
+  [/\b(houthis?|ansar allah)\b/gi, "houthi"],
+  [/\b(hezbollah|hizbullah)\b/gi, "hezbollah"],
+  [/\b(strait of hormuz|hormuz strait)\b/gi, "hormuz"],
+  [/\b(missiles?|rockets?|interceptors?|ammunition|munitions)\b/gi, "missile"],
+  [/\b(stockpiles?|inventor(?:y|ies)|running low|shortages?)\b/gi, "stockpile"],
+  [/\b(clash(?:ed)?|confront(?:ed|ation)?|disput(?:e|ed)|den(?:y|ies|ied))\b/gi, "dispute"],
+  [/\b(strik(?:e|es|ing)|attack(?:s|ed)?|bomb(?:s|ed|ing)?|hit(?:s)?)\b/gi, "attack"],
+];
+
+function eventTokens(text: string): Set<string> {
+  let normalized = text.toLowerCase();
+  for (const [pattern, replacement] of EVENT_ALIASES) normalized = normalized.replace(pattern, replacement);
+  return new Set(normalizeTitle(normalized).split(" ").filter((word) => word.length > 3 && !STOPWORDS.has(word)));
+}
+
+export function eventSimilarity(a: string, b: string): number {
+  const left = eventTokens(a);
+  const right = eventTokens(b);
+  if (left.size === 0 || right.size === 0) return 0;
+  const shared = [...left].filter((token) => right.has(token)).length;
+  const containment = shared / Math.min(left.size, right.size);
+  const union = left.size + right.size - shared;
+  return containment * 0.7 + (union ? shared / union : 0) * 0.3;
+}
+
+export function sameEvent(a: string, b: string): boolean {
+  return titleSimilarity(a, b) >= 0.52 || eventSimilarity(a, b) >= 0.56;
+}
+
+export function cleanEditorialText(value: string): string {
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&(?:amp;)?nbsp;|&#160;/gi, " ")
+    .replace(/&(?:amp;)?quot;|&#34;/gi, '"')
+    .replace(/&(?:amp;)?apos;|&#39;/gi, "'")
+    .replace(/&(?:amp;)?lt;/gi, "<")
+    .replace(/&(?:amp;)?gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/https?:\/\/t\.co\/\S+/gi, " ")
+    .replace(/pic\.twitter\.com\/\S+/gi, " ")
+    .replace(/\b(?:Iran[–-]?(?:US|USA)|US[–-]?Iran)\s+(?:live\s+)?updates?\s*[:|–-]?/gi, "")
+    .replace(/\b(?:live updates?|live blog|as it happened)\s*[:|–-]?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const TRUSTED_TIERS: Array<{ rank: number; match: RegExp }> = [
   { rank: 1, match: /reuters|apnews|associated press|bbc|afp|bloomberg/i },
-  { rank: 2, match: /al jazeera|the guardian|nytimes|washingtonpost|ft\.com|wsj/i },
+  { rank: 2, match: /middle east eye|al jazeera|the guardian|nytimes|washingtonpost|ft\.com|wsj/i },
   { rank: 3, match: /cnn|nbc|cbs|abcnews|npr|dw\.com|france24|times of israel/i },
   { rank: 4, match: /irna|mehr|tasnim|press ?tv|rudaw|shafaq|amwaj/i },
 ];

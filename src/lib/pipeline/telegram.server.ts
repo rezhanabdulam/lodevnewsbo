@@ -56,7 +56,11 @@ export async function telegramCall<T = Record<string, unknown>>(
 }
 
 function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 export interface OutgoingPost {
@@ -81,7 +85,7 @@ export function formatMessage(post: OutgoingPost): string {
     : "";
 
   const lines = [
-    post.breaking ? "🚨 <b>BREAKING</b>" : `📰 <b>${escapeHtml(post.category.toUpperCase())}</b>`,
+    `📰 <b>${escapeHtml(post.category.replace(/-/g, " ").toUpperCase())}</b>`,
     "",
     `<b>${escapeHtml(post.headline)}</b>`,
     "",
