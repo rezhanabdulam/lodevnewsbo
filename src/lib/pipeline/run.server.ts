@@ -9,6 +9,8 @@ import {
   respectGate,
   sourceTrust,
   sameEvent,
+  isLeaderStatement,
+  isEnglishText,
 } from "./filters.server";
 import {
   classifyBatch,
@@ -125,9 +127,10 @@ export async function runIngest(): Promise<IngestStats> {
           const topical =
             /iran|tehran|irgc|khamenei|israel|hezbollah|houthi|yemen|iraq|syria|lebanon|militia|hormuz|persian gulf|tanker|oil|gold|nuclear|uranium|enrich|iaea|sanction|trump|pentagon|centcom|us navy|missile|drone|airstrike|strike|ceasefire|nato|mossad/i;
           collected.push(
-            ...(await fetchPublisherFeeds()).filter((a) =>
-              topical.test(`${a.title} ${a.description ?? ""}`),
-            ),
+            ...(await fetchPublisherFeeds()).filter((a) => {
+              const text = `${a.title} ${a.description ?? ""}`;
+              return topical.test(text) || isLeaderStatement(text);
+            }),
           );
         } catch {
           /* optional safety net */
@@ -285,7 +288,14 @@ export async function runIngest(): Promise<IngestStats> {
       .single();
 
     const breaking = isBreaking(category, article.title, settings["breaking_categories"] ?? []);
-    const parts = await scoreParts(category, article.publishedAt, breaking);
+    const leaderStatement = isLeaderStatement(`${article.title} ${article.description ?? ""}`);
+    const parts = await scoreParts(
+      category,
+      article.publishedAt,
+      breaking,
+      leaderStatement,
+      article.sourceName,
+    );
 
     const { error: qErr } = await supabaseAdmin.from("queue").insert({
       dedup_key: key,
@@ -372,7 +382,13 @@ function safeDate(value: string): string | null {
   return Number.isNaN(ts) ? null : new Date(ts).toISOString();
 }
 
-async function scoreParts(category: Category, publishedAt: string | null, breaking: boolean) {
+async function scoreParts(
+  category: Category,
+  publishedAt: string | null,
+  breaking: boolean,
+  leaderStatement = false,
+  sourceName: string | null = null,
+) {
   const priority = CATEGORY_PRIORITY[category] ?? 10;
 
   const ageHours = publishedAt
@@ -401,8 +417,33 @@ async function scoreParts(category: Category, publishedAt: string | null, breaki
   const rotationBonus = starvedHours >= 2 ? 15 : 0;
 
   const breakingBonus = breaking ? 1000 : 0;
-  const total = priority + freshness + quotaPenalty + rotationBonus + breakingBonus;
-  return { priority, freshness, quotaPenalty, rotationBonus, breakingBonus, total };
+  // Top-leader speeches/statements from either side are always worth posting.
+  const leaderBonus = leaderStatement ? 120 : 0;
+
+  // Source diversity: an outlet that already dominated the last 3h is damped.
+  let sourcePenalty = 0;
+  if (sourceName) {
+    const since = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    const { count: fromSource } = await supabaseAdmin
+      .from("published_history")
+      .select("id", { count: "exact", head: true })
+      .eq("source_name", sourceName)
+      .gte("published_at", since);
+    sourcePenalty = -(fromSource ?? 0) * 20;
+  }
+
+  const total =
+    priority + freshness + quotaPenalty + rotationBonus + breakingBonus + leaderBonus + sourcePenalty;
+  return {
+    priority,
+    freshness,
+    quotaPenalty,
+    rotationBonus,
+    breakingBonus,
+    leaderBonus,
+    sourcePenalty,
+    total,
+  };
 }
 
 /* ------------------------------- PUBLISH --------------------------------- */
@@ -581,6 +622,15 @@ export async function runPublish(
         }
       }
 
+
+      // Final language guard: never ship a non-English post on an English chat.
+      if (language !== "ckb" && !isEnglishText(`${headline} ${summary}`).ok) {
+        await supabaseAdmin
+          .from("queue")
+          .update({ status: "rejected-language" })
+          .eq("id", item.id);
+        continue;
+      }
 
       const post: OutgoingPost = {
         headline,
