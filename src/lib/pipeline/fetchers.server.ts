@@ -128,8 +128,12 @@ export async function fetchBingNewsRss(
   return parseRssItems(await res.text(), "Bing News RSS", null);
 }
 
-/** Direct publisher feeds — always reachable, always fresh, no query support. */
-export const PUBLISHER_FEEDS: Array<{ name: string; url: string }> = [
+/**
+ * Direct publisher feeds — always reachable, always fresh, no query support.
+ * `cap` limits how many items a single feed may contribute per run so no one
+ * outlet (previously Middle East Eye) can dominate the queue.
+ */
+export const PUBLISHER_FEEDS: Array<{ name: string; url: string; cap?: number }> = [
   { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml" },
   { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml" },
   { name: "The Guardian World", url: "https://www.theguardian.com/world/rss" },
@@ -137,14 +141,22 @@ export const PUBLISHER_FEEDS: Array<{ name: string; url: string }> = [
   { name: "Al Arabiya", url: "https://english.alarabiya.net/tools/rss" },
   { name: "Rudaw", url: "https://www.rudaw.net/rss/english" },
   { name: "Shafaq News", url: "https://shafaq.com/en/rss" },
+  // Iranian outlets (English editions)
   { name: "Press TV", url: "https://www.presstv.ir/rss.xml" },
   { name: "Mehr News", url: "https://en.mehrnews.com/rss" },
   { name: "Tehran Times", url: "https://www.tehrantimes.com/rss" },
-  { name: "Middle East Eye", url: "https://www.middleeasteye.net/rss" },
-  { name: "Defense News Mideast", url: "https://www.defensenews.com/arc/outboundfeeds/rss/category/mideast-africa/?outputType=xml" },
-  { name: "OilPrice.com", url: "https://oilprice.com/rss/main" },
-  { name: "CNBC Energy", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19836768" },
+  { name: "Tasnim News", url: "https://www.tasnimnews.com/en/rss/feed/0/8/0/" },
+  { name: "IRNA English", url: "https://en.irna.ir/rss" },
+  { name: "Fars News", url: "https://www.farsnews.ir/en/rss" },
+  { name: "Al Mayadeen", url: "https://english.almayadeen.net/rss" },
+  // Analysis — capped hard, it was over-represented
+  { name: "Middle East Eye", url: "https://www.middleeasteye.net/rss", cap: 4 },
+  { name: "Defense News Mideast", url: "https://www.defensenews.com/arc/outboundfeeds/rss/category/mideast-africa/?outputType=xml", cap: 6 },
+  { name: "OilPrice.com", url: "https://oilprice.com/rss/main", cap: 6 },
+  { name: "CNBC Energy", url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19836768", cap: 6 },
 ];
+
+const DEFAULT_FEED_CAP = 15;
 
 /** Fetches every publisher feed in parallel; failures are ignored per feed. */
 export async function fetchPublisherFeeds(): Promise<FetchedArticle[]> {
@@ -153,7 +165,8 @@ export async function fetchPublisherFeeds(): Promise<FetchedArticle[]> {
       try {
         const res = await fetch(feed.url, { headers: RSS_HEADERS });
         if (!res.ok) return [];
-        return parseRssItems(await res.text(), `${feed.name} RSS`, feed.name);
+        const items = parseRssItems(await res.text(), `${feed.name} RSS`, feed.name);
+        return items.slice(0, feed.cap ?? DEFAULT_FEED_CAP);
       } catch {
         return [];
       }
