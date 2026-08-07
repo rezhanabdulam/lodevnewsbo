@@ -75,21 +75,48 @@ export function respectGate(article: FetchedArticle): GateResult {
   return { ok: true };
 }
 
-const NON_LATIN_SCRIPT = /[\u0900-\u097F\u0980-\u09FF\u0A00-\u0D7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
+const NON_LATIN_SCRIPT =
+  /[\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0700-\u074F\u0900-\u097F\u0980-\u09FF\u0A00-\u0D7F\u0E00-\u0E7F\u10A0-\u10FF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
+const ACCENTED_LATIN = /[àâäãáçéèêëíìîïñóòôöõúùûüýÿåæøœšžğışİ]/i;
+
 const ENGLISH_MARKERS = new Set(
   "the a an and or but of to in on for from with by as at is are was were has have had will would could should says said after before over into amid about against its their his her this that these those new more not no under during between".split(" "),
 );
 
-export function englishGate(article: FetchedArticle): GateResult {
-  const text = `${article.title} ${article.description ?? ""}`.replace(/https?:\/\/\S+/g, " ");
+/** Common function words of the Latin-script languages that keep leaking in. */
+const FOREIGN_MARKERS = new Set(
+  // es / pt
+  "el los las del una unos unas con por para que como sobre entre desde este esta esos são não uma dos das pelo pela mais após contra"
+    .split(" ")
+    // fr
+    .concat("les des une aux dans pour avec sur elle ils leur cette entre depuis contre après plus être ont".split(" "))
+    // de / it / nl / tr / id
+    .concat(
+      "der die das und ist nicht ein eine mit auf für von den dem sich auch werden gli della delle nella sono anche dopo contro het een van zijn niet voor bir ve ile için olarak dan yang dengan untuk"
+        .split(" "),
+    ),
+);
+
+export function isEnglishText(raw: string): GateResult {
+  const text = raw.replace(/https?:\/\/\S+/g, " ");
   if (NON_LATIN_SCRIPT.test(text)) return { ok: false, reason: "non-English script" };
   const words = text.toLowerCase().match(/[a-z]+/g) ?? [];
   if (words.length < 4) return { ok: false, reason: "insufficient English text" };
   const markers = words.filter((word) => ENGLISH_MARKERS.has(word)).length;
+  const foreign = words.filter((word) => FOREIGN_MARKERS.has(word)).length;
+  if (foreign >= 2 && foreign >= markers) {
+    return { ok: false, reason: "non-English (Latin-script) language" };
+  }
+  const accentRatio = (text.match(new RegExp(ACCENTED_LATIN, "gi")) ?? []).length / text.length;
+  if (accentRatio > 0.03) return { ok: false, reason: "heavy non-English diacritics" };
   if (markers < 2 && markers / words.length < 0.08) {
     return { ok: false, reason: "language is not confidently English" };
   }
   return { ok: true };
+}
+
+export function englishGate(article: FetchedArticle): GateResult {
+  return isEnglishText(`${article.title} ${article.description ?? ""}`);
 }
 
 /** GATE 4 — freshness (24h). */
@@ -242,4 +269,18 @@ export function sourceTrust(sourceName: string | null, url: string): number {
   const hay = `${sourceName ?? ""} ${hostOf(url)}`;
   for (const tier of TRUSTED_TIERS) if (tier.match.test(hay)) return tier.rank;
   return 9;
+}
+
+/**
+ * Speeches and formal statements by top leaders on either side are always
+ * newsworthy for this channel (e.g. Qalibaf, Khamenei, Pezeshkian, Trump).
+ */
+export const LEADER_PATTERN =
+  /\b(khamenei|pezeshkian|qalibaf|ghalibaf|larijani|araghchi|salami|bagheri|shamkhani|raisi|zarif|supreme leader|iran'?s? president|parliament speaker|irgc (chief|commander)|foreign minister|trump|vance|rubio|hegseth|netanyahu|nasrallah|qassem|al[- ]sudani|sistani|erdogan|mbs|bin salman)\b/i;
+
+const SPEECH_PATTERN =
+  /\b(speech|speaks?|spoke|address(?:es|ed)?|remarks?|statement|declares?|declared|warns?|warned|vows?|vowed|says?|said|tells?|told|announce[sd]?|threatens?|ultimatum|press conference|sermon|interview)\b/i;
+
+export function isLeaderStatement(text: string): boolean {
+  return LEADER_PATTERN.test(text) && SPEECH_PATTERN.test(text);
 }
