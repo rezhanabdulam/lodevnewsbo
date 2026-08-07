@@ -270,3 +270,17 @@ export function sourceTrust(sourceName: string | null, url: string): number {
   for (const tier of TRUSTED_TIERS) if (tier.match.test(hay)) return tier.rank;
   return 9;
 }
+
+/**
+ * Speeches and formal statements by top leaders on either side are always
+ * newsworthy for this channel (e.g. Qalibaf, Khamenei, Pezeshkian, Trump).
+ */
+export const LEADER_PATTERN =
+  /\b(khamenei|pezeshkian|qalibaf|ghalibaf|larijani|araghchi|salami|bagheri|shamkhani|raisi|zarif|supreme leader|iran'?s? president|parliament speaker|irgc (chief|commander)|foreign minister|trump|vance|rubio|hegseth|netanyahu|nasrallah|qassem|al[- ]sudani|sistani|erdogan|mbs|bin salman)\b/i;
+
+const SPEECH_PATTERN =
+  /\b(speech|speaks?|spoke|address(?:es|ed)?|remarks?|statement|declares?|declared|warns?|warned|vows?|vowed|says?|said|tells?|told|announce[sd]?|threatens?|ultimatum|press conference|sermon|interview)\b/i;
+
+export function isLeaderStatement(text: string): boolean {
+  return LEADER_PATTERN.test(text) && SPEECH_PATTERN.test(text);
+}
