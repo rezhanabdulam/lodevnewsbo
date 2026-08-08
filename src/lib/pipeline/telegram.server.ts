@@ -63,6 +63,11 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+export interface PostSource {
+  name: string;
+  url: string;
+}
+
 export interface OutgoingPost {
   headline: string;
   summary: string;
@@ -73,6 +78,8 @@ export interface OutgoingPost {
   breaking: boolean;
   category: string;
   timezone: string;
+  /** Extra outlets covering the same event (event clustering). */
+  extraSources?: PostSource[];
 }
 
 export function formatMessage(post: OutgoingPost): string {
@@ -84,6 +91,11 @@ export function formatMessage(post: OutgoingPost): string {
       }).format(new Date(post.originalPublishedAt))
     : "";
 
+  const sources: PostSource[] = [
+    { name: post.sourceName, url: post.url },
+    ...(post.extraSources ?? []),
+  ];
+
   const lines = [
     `📰 <b>${escapeHtml(post.category.replace(/-/g, " ").toUpperCase())}</b>`,
     "",
@@ -92,10 +104,21 @@ export function formatMessage(post: OutgoingPost): string {
     escapeHtml(post.summary),
     "",
     `🗞 <i>${escapeHtml(post.sourceName)}</i>${when ? ` · ${escapeHtml(when)}` : ""}`,
-    `<a href="${escapeHtml(post.url)}">Read the full report</a>`,
   ];
+
+  if (sources.length > 1) {
+    lines.push(
+      ...sources.map(
+        (s, i) => `${i === 0 ? "🔗" : "•"} <a href="${escapeHtml(s.url)}">${escapeHtml(s.name)}</a>`,
+      ),
+    );
+  } else {
+    lines.push(`<a href="${escapeHtml(post.url)}">Read the full report</a>`);
+  }
+
   return lines.filter((l) => l !== undefined).join("\n");
 }
+
 
 export async function sendPost(chatId: number, post: OutgoingPost): Promise<void> {
   const text = formatMessage(post);
