@@ -654,6 +654,26 @@ export async function runPublish(
   );
 
   for (const item of items as any[]) {
+    // Editorial guard at send time: banned outlets, off-beat or demoralising
+    // items that were queued before the rules tightened never go out.
+    const asArticle = {
+      provider: "queue",
+      sourceName: item.source_name ?? null,
+      url: item.url,
+      title: item.headline,
+      description: item.summary,
+      imageUrl: item.image_url,
+      publishedAt: item.original_published_at,
+    } as FetchedArticle;
+    const guard =
+      !sourceBanGate(asArticle).ok ||
+      !respectGate(asArticle).ok ||
+      !relevanceGate(asArticle).ok;
+    if (guard) {
+      await supabaseAdmin.from("queue").update({ status: "rejected-policy" }).eq("id", item.id);
+      continue;
+    }
+
     // Same event already covered? mark and skip without sending.
     const repeated =
       publishedKeys.has(item.dedup_key) ||
