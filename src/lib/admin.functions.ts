@@ -163,13 +163,20 @@ export const upsertSource = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message);
       return { ok: true };
     }
+    const kind = rest.kind ?? "rss";
     const { error } = await sb.from("sources").insert({
       name: rest.name!,
-      kind: rest.kind ?? "rss",
+      kind,
       secret_ref: rest.secret_ref ?? null,
       priority: rest.priority ?? 100,
       daily_quota: rest.daily_quota ?? null,
+      // Telegram monitors store the channel handle so the scraper can find it.
+      config:
+        kind === "telegram"
+          ? { channel: rest.name!.replace(/^@/, "").trim() }
+          : {},
     });
+
     if (error) throw new Error(error.message);
     return { ok: true };
   });

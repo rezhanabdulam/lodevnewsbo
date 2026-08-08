@@ -16,6 +16,26 @@ export const JUNK_DOMAINS = [
   "fool.com",
 ];
 
+/** Israeli outlets are never used as a news source for this channel. */
+export const BANNED_DOMAINS = [
+  "timesofisrael.com",
+  "jpost.com",
+  "ynetnews.com",
+  "ynet.co.il",
+  "israelhayom.com",
+  "haaretz.com",
+  "i24news.tv",
+  "arutzsheva.com",
+  "israelnationalnews.com",
+  "jns.org",
+  "allisrael.com",
+  "jewishpress.com",
+  "timesofisrael.co.il",
+];
+
+export const BANNED_SOURCE_PATTERN =
+  /times of israel|jerusalem post|ynet|israel hayom|haaretz|i24|arutz sheva|israel national news|jns|all israel|jewish press/i;
+
 export const JUNK_TITLE_PATTERNS: RegExp[] = [
   /\b(form|files?)\s*(8-k|10-k|10-q|s-1|13[a-z]?)\b/i,
   /\bquiz\b/i,
@@ -29,15 +49,46 @@ export const JUNK_TITLE_PATTERNS: RegExp[] = [
   /\b(live updates?|live blog|as it happened)\b/i,
 ];
 
+/**
+ * Soft-news / lifestyle noise that Iranian outlets publish heavily and that has
+ * nothing to do with the conflict beat (football, cinema, tourism, weather…).
+ */
+export const SOFT_NEWS_PATTERNS: RegExp[] = [
+  /\b(football|soccer|volleyball|basketball|wrestling|weightlifting|futsal|goalkeep\w*|striker|midfielder|league|premier league|world cup|olympic|championship|tournament|match|derby|coach|club|esteghlal|persepolis|sepahan|tractor)\b/i,
+  /\b(film|movie|cinema|festival|actor|actress|director'?s cut|box office|series|drama|music|singer|concert|album|art exhibition|museum|carpet weaving|handicraft)\b/i,
+  /\b(recipe|cuisine|restaurant|tourism|tourist|travel guide|hotel|resort|nowruz celebration|fashion|celebrity|royal family|dating|horoscope)\b/i,
+  /\b(earthquake drill|weather forecast|air pollution index|traffic accident|road crash|bus crash|train derail)\b/i,
+  /\b(school shooting|mass shooting)\b/i,
+];
+
 /** Slurs / dehumanising phrasing aimed at Kurds or Muslims. */
 export const DISRESPECT_PATTERNS: RegExp[] = [
-  /\b(dirty|filthy|savage|barbaric|inferior)\s+(kurds?|muslims?|arabs?|persians?)\b/i,
-  /\b(kurds?|muslims?)\s+(are|is)\s+(terrorists?|animals?|vermin|scum|subhuman)\b/i,
+  /\b(dirty|filthy|savage|barbaric|inferior)\s+(kurds?|muslims?|arabs?|persians?|iranians?)\b/i,
+  /\b(kurds?|muslims?|iranians?)\s+(are|is)\s+(terrorists?|animals?|vermin|scum|subhuman)\b/i,
   /\b(all|every)\s+muslims?\s+(are|is)\b/i,
   /\bislam(ic)?\s+(cancer|plague|virus|disease)\b/i,
   /\bdeath to (islam|muslims|kurds)\b/i,
   /\bexterminate\s+(the\s+)?(kurds?|muslims?)\b/i,
+  // Anti-Kurdish / anti-Muslim framing and smears
+  /\b(kurds?|kurdish|peshmerga|kurdistan)\b[^.]{0,40}\b(terrorists?|traitors?|separatist threat|must be crushed|deserve)\b/i,
+  /\b(anti[- ]?(islam|muslim)|islamophob\w+|ban (the )?(quran|hijab|mosques?))\b/i,
+  /\b(quran|koran|mosque|prophet muhammad)\b[^.]{0,30}\b(burn(ed|ing)?|desecrat\w+|insult\w*|mock\w*)\b/i,
 ];
+
+/**
+ * Demoralising / speculative-negative coverage of Iran and its leadership.
+ * The channel takes a pro-Iran editorial line: rumours about leaders dying,
+ * regime collapse, humiliation framing and unsourced "reports claim" doom are
+ * never published.
+ */
+export const NEGATIVE_IRAN_PATTERNS: RegExp[] = [
+  /\b(khamenei|supreme leader|pezeshkian|qalibaf|ghalibaf|larijani|araghchi|salami|irgc chief)\b[^.]{0,60}\b(could die|near death|dying|critical condition|dead|health crisis|incapacitat\w+|coma|fled|hiding|ousted|toppl\w+)\b/i,
+  /\b(iran(ian)?|tehran|islamic republic)\b[^.]{0,60}\b(regime (change|collapse|fall|crumbl\w+)|on the brink of collapse|about to fall|humiliat\w+|defeated|surrender\w*|begging|desperate|crushed|obliterat\w+|kneel\w*|doomed|hopeless)\b/i,
+  /\b(uprising|revolt|protests?)\b[^.]{0,40}\b(topple|overthrow|end of the (regime|islamic republic))\b/i,
+  /\bpost[- ]?(khamenei|islamic republic) (iran|era)\b/i,
+  /\b(report claims?|a report claims?|sources? claim|rumou?rs? (say|claim|suggest))\b[^.]{0,60}\b(die|death|dead|dying|assassinat\w+|flee|fled)\b/i,
+];
+
 
 export function hostOf(url: string): string {
   try {
@@ -50,6 +101,21 @@ export function hostOf(url: string): string {
 export interface GateResult {
   ok: boolean;
   reason?: string;
+}
+
+/** GATE 0 — banned outlets (Israeli media are never used). */
+export function sourceBanGate(article: FetchedArticle): GateResult {
+  const host = hostOf(article.url);
+  if (BANNED_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))) {
+    return { ok: false, reason: `banned source: ${host}` };
+  }
+  if (article.sourceName && BANNED_SOURCE_PATTERN.test(article.sourceName)) {
+    return { ok: false, reason: `banned source: ${article.sourceName}` };
+  }
+  if (BANNED_SOURCE_PATTERN.test(article.title)) {
+    return { ok: false, reason: "banned source attribution in title" };
+  }
+  return { ok: true };
 }
 
 /** GATE 1 — junk. Runs before anything else; short-circuits. */
@@ -66,14 +132,47 @@ export function junkGate(article: FetchedArticle): GateResult {
   return { ok: true };
 }
 
-/** GATE 2 — respect. */
+/** GATE 2 — respect + pro-Iran editorial line. */
 export function respectGate(article: FetchedArticle): GateResult {
   const text = `${article.title} ${article.description ?? ""}`;
   if (DISRESPECT_PATTERNS.some((p) => p.test(text))) {
-    return { ok: false, reason: "disrespectful content" };
+    return { ok: false, reason: "disrespectful to Kurds/Muslims" };
+  }
+  if (NEGATIVE_IRAN_PATTERNS.some((p) => p.test(text))) {
+    return { ok: false, reason: "demoralising/unsourced negative Iran framing" };
   }
   return { ok: true };
 }
+
+/**
+ * GATE 2b — beat relevance. Every story must touch the Iran–US conflict, its
+ * regional actors, or its economic fallout. Soft news is dropped outright even
+ * when it comes from an approved outlet.
+ */
+const BEAT_PATTERNS: RegExp[] = [
+  /\b(iran|iranian|tehran|irgc|khamenei|pezeshkian|qalibaf|ghalibaf|araghchi|larijani|islamic republic|persian gulf|hormuz)\b/i,
+  /\b(iraq|iraqi|baghdad|basra|mosul|erbil|sulaymaniyah|kurdistan region|najaf|karbala|sistani|sudani|pmf|hashd)\b/i,
+  /\b(hezbollah|houthi|ansar allah|kataib|nujaba|axis of resistance|hamas|militia|proxy|proxies)\b/i,
+  /\b(nuclear|uranium|enrich\w*|iaea|sanction\w*|snapback|jcpoa)\b/i,
+  /\b(centcom|pentagon|us (navy|military|forces|troops)|carrier strike group|airstrike|air strike|missile|drone|ballistic|ceasefire|war|attack|strike)\b/i,
+  /\b(oil|crude|brent|opec|barrel|refinery|tanker|shipping lane|red sea|bab el-?mandeb|gold price|bullion|energy market)\b/i,
+  /\b(middle east|gulf states|saudi|riyadh|qatar|uae|oman|bahrain|kuwait|syria|lebanon|yemen|turkey|ankara)\b/i,
+];
+
+export function relevanceGate(article: FetchedArticle): GateResult {
+  const text = `${article.title} ${article.description ?? ""}`;
+  if (SOFT_NEWS_PATTERNS.some((p) => p.test(text))) {
+    return { ok: false, reason: "off-beat soft news" };
+  }
+  const hits = BEAT_PATTERNS.filter((p) => p.test(text)).length;
+  if (hits === 0) return { ok: false, reason: "unrelated to the conflict beat" };
+  // A lone generic Middle-East mention is not enough on its own.
+  if (hits === 1 && BEAT_PATTERNS[6]!.test(text) && !/iran|iraq|us |u\.s\./i.test(text)) {
+    return { ok: false, reason: "only tangential regional mention" };
+  }
+  return { ok: true };
+}
+
 
 const NON_LATIN_SCRIPT =
   /[\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0700-\u074F\u0900-\u097F\u0980-\u09FF\u0A00-\u0D7F\u0E00-\u0E7F\u10A0-\u10FF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
@@ -237,25 +336,54 @@ export function sameEvent(a: string, b: string): boolean {
   return titleSimilarity(a, b) >= 0.52 || eventSimilarity(a, b) >= 0.56;
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ",
+  quot: '"',
+  apos: "'",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  hellip: "\u2026",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  lt: "<",
+  gt: ">",
+  amp: "&",
+};
+
+/** Decodes named + numeric entities, repeatedly (feeds are often double-encoded). */
+function decodeAllEntities(input: string): string {
+  let out = input;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = out
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+      .replace(/&([a-z]+);/gi, (m, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? m);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
 export function cleanEditorialText(value: string): string {
-  return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&(?:amp;)?nbsp;|&#160;/gi, " ")
-    .replace(/&(?:amp;)?quot;|&#34;/gi, '"')
-    .replace(/&(?:amp;)?apos;|&#39;/gi, "'")
-    .replace(/&(?:amp;)?lt;/gi, "<")
-    .replace(/&(?:amp;)?gt;/gi, ">")
-    .replace(/&amp;/gi, "&")
+  return decodeAllEntities(
+    decodeAllEntities(value)
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  )
     .replace(/https?:\/\/t\.co\/\S+/gi, " ")
     .replace(/pic\.twitter\.com\/\S+/gi, " ")
+    .replace(/\s*The post .{0,160}? appeared first on .{0,60}?\.?\s*$/i, "")
     .replace(/\b(?:Iran[–-]?(?:US|USA)|US[–-]?Iran)\s+(?:live\s+)?updates?\s*[:|–-]?/gi, "")
     .replace(/\b(?:live updates?|live blog|as it happened)\s*[:|–-]?/gi, "")
+    .replace(/\s*\*\s*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
+
 
 const TRUSTED_TIERS: Array<{ rank: number; match: RegExp }> = [
   { rank: 1, match: /reuters|apnews|associated press|bbc|afp|bloomberg/i },

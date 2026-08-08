@@ -9,6 +9,8 @@ import {
   respectGate,
   sourceTrust,
   sameEvent,
+  relevanceGate,
+  sourceBanGate,
   isLeaderStatement,
   isEnglishText,
 } from "./filters.server";
@@ -18,7 +20,11 @@ import {
   rewrite,
   translateToSorani,
 } from "./ai.server";
-import { sendPost, type OutgoingPost } from "./telegram.server";
+import { sendPost, type OutgoingPost, type PostSource } from "./telegram.server";
+import {
+  DEFAULT_TELEGRAM_CHANNELS,
+  fetchTelegramSignals,
+} from "./telegram-channels.server";
 import { CATEGORY_PRIORITY, type Category, type FetchedArticle } from "./types";
 
 type Settings = Record<string, any>;
@@ -40,6 +46,7 @@ export interface IngestStats {
   duplicate: number;
   queued: number;
   breaking: number;
+  signals: number;
   errors: string[];
 }
 
@@ -54,6 +61,7 @@ export async function runIngest(): Promise<IngestStats> {
     duplicate: 0,
     queued: 0,
     breaking: 0,
+    signals: 0,
     errors: [] as string[],
   };
 
@@ -69,6 +77,34 @@ export async function runIngest(): Promise<IngestStats> {
 
   const queries = (topics ?? []).map((t: any) => t.query as string);
   const collected: FetchedArticle[] = [];
+
+  // --- Breaking signals from monitored public Telegram channels -------------
+  // Scraped BEFORE the RSS/API fetch so matching stories can be promoted to
+  // breaking priority. Channel posts are signals only, never published as-is.
+  const channelRows = (sources ?? []).filter((s: any) => s.kind === "telegram");
+  const channels = channelRows.length
+    ? channelRows
+        .map((r: any) => String(r.config?.channel ?? r.name ?? "").replace(/^@/, ""))
+        .filter(Boolean)
+    : DEFAULT_TELEGRAM_CHANNELS;
+  let signalTexts: string[] = [];
+  try {
+    const posts = await fetchTelegramSignals(channels);
+    signalTexts = posts
+      .filter((p) => {
+        if (!p.publishedAt) return true;
+        const ts = Date.parse(p.publishedAt);
+        return Number.isNaN(ts) || Date.now() - ts < 6 * 3_600_000;
+      })
+      .map((p) => cleanEditorialText(p.text))
+      // Matching is token-based, so only English-language channel posts can be
+      // aligned with incoming RSS headlines. Arabic posts are ignored here.
+      .filter((text) => isEnglishText(text).ok);
+    stats.signals = signalTexts.length;
+  } catch (err) {
+    stats.errors.push(`telegram signals: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const hasSignal = (text: string) => signalTexts.some((s) => sameEvent(s, text));
 
   // NewsData has a hard daily credit cap, so topics are OR-batched into a few
   // wide queries instead of one request per topic.
@@ -160,6 +196,12 @@ export async function runIngest(): Promise<IngestStats> {
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
 
+    const banned = sourceBanGate(article);
+    if (!banned.ok) {
+      stats.junk += 1;
+      rejects.push(rejectRow(article, key, banned.reason!));
+      continue;
+    }
     const junk = junkGate(article);
     if (!junk.ok) {
       stats.junk += 1;
@@ -170,6 +212,12 @@ export async function runIngest(): Promise<IngestStats> {
     if (!respect.ok) {
       stats.disrespect += 1;
       rejects.push(rejectRow(article, key, respect.reason!));
+      continue;
+    }
+    const relevant = relevanceGate(article);
+    if (!relevant.ok) {
+      stats.offTopic += 1;
+      rejects.push(rejectRow(article, key, relevant.reason!));
       continue;
     }
     const english = englishGate(article);
@@ -287,7 +335,10 @@ export async function runIngest(): Promise<IngestStats> {
       .select("id")
       .single();
 
-    const breaking = isBreaking(category, article.title, settings["breaking_categories"] ?? []);
+    const articleText = `${article.title} ${article.description ?? ""}`;
+    const signalled = hasSignal(articleText);
+    const breaking =
+      isBreaking(category, article.title, settings["breaking_categories"] ?? []) || signalled;
     const leaderStatement = isLeaderStatement(`${article.title} ${article.description ?? ""}`);
     const parts = await scoreParts(
       category,
@@ -309,8 +360,8 @@ export async function runIngest(): Promise<IngestStats> {
       original_published_at: article.publishedAt
         ? new Date(article.publishedAt).toISOString()
         : null,
-      score: parts.total,
-      score_parts: parts,
+      score: parts.total + (signalled ? 150 : 0),
+      score_parts: { ...parts, signalBonus: signalled ? 150 : 0 },
       breaking,
     });
     if (!qErr) {
@@ -535,6 +586,7 @@ export async function runPublish(
     .lt("original_published_at", shelfLife);
 
   const limit = opts.force ?? 1;
+  // Pull a wider candidate pool so related stories can be clustered together.
   let query = supabaseAdmin
     .from("queue")
     .select("*")
@@ -542,11 +594,41 @@ export async function runPublish(
     .order("breaking", { ascending: false })
     .order("score", { ascending: false })
     .order("original_published_at", { ascending: false })
-    .limit(limit);
+    .limit(Math.max(limit * 8, 24));
 
   if (opts.breakingOnly) query = query.eq("breaking", true);
 
-  const { data: items } = await query;
+  const { data: pool } = await query;
+
+  // --- Event clustering -----------------------------------------------------
+  // 2-4 articles describing the same event become ONE message; the most
+  // trusted/complete item leads and the rest contribute source links.
+  const clusters: Array<{ lead: any; members: any[] }> = [];
+  const claimed = new Set<string>();
+  for (const candidate of (pool ?? []) as any[]) {
+    if (claimed.has(candidate.id)) continue;
+    claimed.add(candidate.id);
+    const members = [candidate];
+    for (const other of (pool ?? []) as any[]) {
+      if (claimed.has(other.id) || members.length >= 4) continue;
+      if (sameEvent(`${candidate.headline} ${candidate.summary}`, `${other.headline} ${other.summary}`)) {
+        claimed.add(other.id);
+        members.push(other);
+      }
+    }
+    members.sort(
+      (a, b) =>
+        sourceTrust(a.source_name, a.url) - sourceTrust(b.source_name, b.url) ||
+        (b.summary?.length ?? 0) - (a.summary?.length ?? 0),
+    );
+    clusters.push({ lead: members[0], members });
+    if (clusters.length >= limit) break;
+  }
+
+  const items = clusters.map((c) => ({
+    ...c.lead,
+    _members: c.members,
+  }));
   if (!items || items.length === 0) {
     result.skipped = "queue empty";
     return result;
@@ -575,6 +657,26 @@ export async function runPublish(
   );
 
   for (const item of items as any[]) {
+    // Editorial guard at send time: banned outlets, off-beat or demoralising
+    // items that were queued before the rules tightened never go out.
+    const asArticle = {
+      provider: "queue",
+      sourceName: item.source_name ?? null,
+      url: item.url,
+      title: item.headline,
+      description: item.summary,
+      imageUrl: item.image_url,
+      publishedAt: item.original_published_at,
+    } as FetchedArticle;
+    const guard =
+      !sourceBanGate(asArticle).ok ||
+      !respectGate(asArticle).ok ||
+      !relevanceGate(asArticle).ok;
+    if (guard) {
+      await supabaseAdmin.from("queue").update({ status: "rejected-policy" }).eq("id", item.id);
+      continue;
+    }
+
     // Same event already covered? mark and skip without sending.
     const repeated =
       publishedKeys.has(item.dedup_key) ||
@@ -632,6 +734,10 @@ export async function runPublish(
         continue;
       }
 
+      const extraSources: PostSource[] = (item._members ?? [])
+        .slice(1)
+        .map((m: any) => ({ name: m.source_name || hostname(m.url), url: m.url }));
+
       const post: OutgoingPost = {
         headline,
         summary,
@@ -642,6 +748,7 @@ export async function runPublish(
         breaking: item.breaking,
         category: item.category,
         timezone: settings["timezone"] ?? "Asia/Baghdad",
+        extraSources,
       };
 
       try {
@@ -669,11 +776,16 @@ export async function runPublish(
       }
     }
 
-    await supabaseAdmin
-      .from("queue")
-      .update({ status: "published" })
-      .eq("id", item.id);
-    result.items.push(item.headline);
+    const memberIds = ((item._members ?? [item]) as any[]).map((m) => m.id);
+    await supabaseAdmin.from("queue").update({ status: "published" }).in("id", memberIds);
+    // Members merged into this post must never resurface as their own story.
+    for (const m of (item._members ?? []) as any[]) {
+      publishedTitles.unshift(m.headline);
+      publishedKeys.add(m.dedup_key);
+    }
+    result.items.push(
+      memberIds.length > 1 ? `${item.headline} (+${memberIds.length - 1} sources)` : item.headline,
+    );
   }
 
   if (!opts.breakingOnly) {
