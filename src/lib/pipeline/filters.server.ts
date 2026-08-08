@@ -16,6 +16,26 @@ export const JUNK_DOMAINS = [
   "fool.com",
 ];
 
+/** Israeli outlets are never used as a news source for this channel. */
+export const BANNED_DOMAINS = [
+  "timesofisrael.com",
+  "jpost.com",
+  "ynetnews.com",
+  "ynet.co.il",
+  "israelhayom.com",
+  "haaretz.com",
+  "i24news.tv",
+  "arutzsheva.com",
+  "israelnationalnews.com",
+  "jns.org",
+  "allisrael.com",
+  "jewishpress.com",
+  "timesofisrael.co.il",
+];
+
+export const BANNED_SOURCE_PATTERN =
+  /times of israel|jerusalem post|ynet|israel hayom|haaretz|i24|arutz sheva|israel national news|jns|all israel|jewish press/i;
+
 export const JUNK_TITLE_PATTERNS: RegExp[] = [
   /\b(form|files?)\s*(8-k|10-k|10-q|s-1|13[a-z]?)\b/i,
   /\bquiz\b/i,
@@ -29,15 +49,46 @@ export const JUNK_TITLE_PATTERNS: RegExp[] = [
   /\b(live updates?|live blog|as it happened)\b/i,
 ];
 
+/**
+ * Soft-news / lifestyle noise that Iranian outlets publish heavily and that has
+ * nothing to do with the conflict beat (football, cinema, tourism, weather…).
+ */
+export const SOFT_NEWS_PATTERNS: RegExp[] = [
+  /\b(football|soccer|volleyball|basketball|wrestling|weightlifting|futsal|goalkeep\w*|striker|midfielder|league|premier league|world cup|olympic|championship|tournament|match|derby|coach|club|esteghlal|persepolis|sepahan|tractor)\b/i,
+  /\b(film|movie|cinema|festival|actor|actress|director'?s cut|box office|series|drama|music|singer|concert|album|art exhibition|museum|carpet weaving|handicraft)\b/i,
+  /\b(recipe|cuisine|restaurant|tourism|tourist|travel guide|hotel|resort|nowruz celebration|fashion|celebrity|royal family|dating|horoscope)\b/i,
+  /\b(earthquake drill|weather forecast|air pollution index|traffic accident|road crash|bus crash|train derail)\b/i,
+  /\b(school shooting|mass shooting)\b/i,
+];
+
 /** Slurs / dehumanising phrasing aimed at Kurds or Muslims. */
 export const DISRESPECT_PATTERNS: RegExp[] = [
-  /\b(dirty|filthy|savage|barbaric|inferior)\s+(kurds?|muslims?|arabs?|persians?)\b/i,
-  /\b(kurds?|muslims?)\s+(are|is)\s+(terrorists?|animals?|vermin|scum|subhuman)\b/i,
+  /\b(dirty|filthy|savage|barbaric|inferior)\s+(kurds?|muslims?|arabs?|persians?|iranians?)\b/i,
+  /\b(kurds?|muslims?|iranians?)\s+(are|is)\s+(terrorists?|animals?|vermin|scum|subhuman)\b/i,
   /\b(all|every)\s+muslims?\s+(are|is)\b/i,
   /\bislam(ic)?\s+(cancer|plague|virus|disease)\b/i,
   /\bdeath to (islam|muslims|kurds)\b/i,
   /\bexterminate\s+(the\s+)?(kurds?|muslims?)\b/i,
+  // Anti-Kurdish / anti-Muslim framing and smears
+  /\b(kurds?|kurdish|peshmerga|kurdistan)\b[^.]{0,40}\b(terrorists?|traitors?|separatist threat|must be crushed|deserve)\b/i,
+  /\b(anti[- ]?(islam|muslim)|islamophob\w+|ban (the )?(quran|hijab|mosques?))\b/i,
+  /\b(quran|koran|mosque|prophet muhammad)\b[^.]{0,30}\b(burn(ed|ing)?|desecrat\w+|insult\w*|mock\w*)\b/i,
 ];
+
+/**
+ * Demoralising / speculative-negative coverage of Iran and its leadership.
+ * The channel takes a pro-Iran editorial line: rumours about leaders dying,
+ * regime collapse, humiliation framing and unsourced "reports claim" doom are
+ * never published.
+ */
+export const NEGATIVE_IRAN_PATTERNS: RegExp[] = [
+  /\b(khamenei|supreme leader|pezeshkian|qalibaf|ghalibaf|larijani|araghchi|salami|irgc chief)\b[^.]{0,60}\b(could die|near death|dying|critical condition|dead|health crisis|incapacitat\w+|coma|fled|hiding|ousted|toppl\w+)\b/i,
+  /\b(iran(ian)?|tehran|islamic republic)\b[^.]{0,60}\b(regime (change|collapse|fall|crumbl\w+)|on the brink of collapse|about to fall|humiliat\w+|defeated|surrender\w*|begging|desperate|crushed|obliterat\w+|kneel\w*|doomed|hopeless)\b/i,
+  /\b(uprising|revolt|protests?)\b[^.]{0,40}\b(topple|overthrow|end of the (regime|islamic republic))\b/i,
+  /\bpost[- ]?(khamenei|islamic republic) (iran|era)\b/i,
+  /\b(report claims?|a report claims?|sources? claim|rumou?rs? (say|claim|suggest))\b[^.]{0,60}\b(die|death|dead|dying|assassinat\w+|flee|fled)\b/i,
+];
+
 
 export function hostOf(url: string): string {
   try {
