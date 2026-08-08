@@ -336,25 +336,54 @@ export function sameEvent(a: string, b: string): boolean {
   return titleSimilarity(a, b) >= 0.52 || eventSimilarity(a, b) >= 0.56;
 }
 
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ",
+  quot: '"',
+  apos: "'",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  hellip: "\u2026",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  lt: "<",
+  gt: ">",
+  amp: "&",
+};
+
+/** Decodes named + numeric entities, repeatedly (feeds are often double-encoded). */
+function decodeAllEntities(input: string): string {
+  let out = input;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = out
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+      .replace(/&([a-z]+);/gi, (m, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? m);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
 export function cleanEditorialText(value: string): string {
-  return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&(?:amp;)?nbsp;|&#160;/gi, " ")
-    .replace(/&(?:amp;)?quot;|&#34;/gi, '"')
-    .replace(/&(?:amp;)?apos;|&#39;/gi, "'")
-    .replace(/&(?:amp;)?lt;/gi, "<")
-    .replace(/&(?:amp;)?gt;/gi, ">")
-    .replace(/&amp;/gi, "&")
+  return decodeAllEntities(
+    decodeAllEntities(value)
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  )
     .replace(/https?:\/\/t\.co\/\S+/gi, " ")
     .replace(/pic\.twitter\.com\/\S+/gi, " ")
+    .replace(/\s*The post .{0,160}? appeared first on .{0,60}?\.?\s*$/i, "")
     .replace(/\b(?:Iran[–-]?(?:US|USA)|US[–-]?Iran)\s+(?:live\s+)?updates?\s*[:|–-]?/gi, "")
     .replace(/\b(?:live updates?|live blog|as it happened)\s*[:|–-]?/gi, "")
+    .replace(/\s*\*\s*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
+
 
 const TRUSTED_TIERS: Array<{ rank: number; match: RegExp }> = [
   { rank: 1, match: /reuters|apnews|associated press|bbc|afp|bloomberg/i },
