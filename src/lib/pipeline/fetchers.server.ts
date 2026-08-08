@@ -62,6 +62,17 @@ function tag(block: string, name: string): string | null {
   return m?.[1] ? decodeEntities(m[1]) : null;
 }
 
+/** Human-readable outlet label derived from the article URL. */
+function hostLabel(url: string): string | null {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    if (/^(bing|www\.bing|news\.google|google|msn)\./.test(host) || host === "bing.com") return null;
+    return host;
+  } catch {
+    return null;
+  }
+}
+
 function parseRssItems(
   xml: string,
   provider: string,
@@ -73,9 +84,14 @@ function parseRssItems(
       const title = tag(block, "title");
       const link = tag(block, "link");
       if (!title || !link) return null;
+      const rawSource = tag(block, "source") ?? fallbackSource;
+      const source =
+        rawSource && !/bing|google|news\.google|msn/i.test(rawSource)
+          ? rawSource
+          : hostLabel(link);
       return {
         provider,
-        sourceName: tag(block, "source") ?? fallbackSource,
+        sourceName: source,
         url: link,
         title,
         description: tag(block, "description"),
@@ -137,7 +153,6 @@ export const PUBLISHER_FEEDS: Array<{ name: string; url: string; cap?: number }>
   { name: "Al Jazeera", url: "https://www.aljazeera.com/xml/rss/all.xml" },
   { name: "BBC World", url: "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml" },
   { name: "The Guardian World", url: "https://www.theguardian.com/world/rss" },
-  { name: "Times of Israel", url: "https://www.timesofisrael.com/feed/" },
   { name: "Al Arabiya", url: "https://english.alarabiya.net/tools/rss" },
   { name: "Rudaw", url: "https://www.rudaw.net/rss/english" },
   { name: "Shafaq News", url: "https://shafaq.com/en/rss" },
