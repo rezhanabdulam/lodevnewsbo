@@ -9,6 +9,8 @@ import {
   respectGate,
   sourceTrust,
   sameEvent,
+  relevanceGate,
+  sourceBanGate,
   isLeaderStatement,
   isEnglishText,
 } from "./filters.server";
@@ -18,7 +20,11 @@ import {
   rewrite,
   translateToSorani,
 } from "./ai.server";
-import { sendPost, type OutgoingPost } from "./telegram.server";
+import { sendPost, type OutgoingPost, type PostSource } from "./telegram.server";
+import {
+  DEFAULT_TELEGRAM_CHANNELS,
+  fetchTelegramSignals,
+} from "./telegram-channels.server";
 import { CATEGORY_PRIORITY, type Category, type FetchedArticle } from "./types";
 
 type Settings = Record<string, any>;
@@ -40,6 +46,7 @@ export interface IngestStats {
   duplicate: number;
   queued: number;
   breaking: number;
+  signals: number;
   errors: string[];
 }
 
@@ -54,6 +61,7 @@ export async function runIngest(): Promise<IngestStats> {
     duplicate: 0,
     queued: 0,
     breaking: 0,
+    signals: 0,
     errors: [] as string[],
   };
 
@@ -69,6 +77,31 @@ export async function runIngest(): Promise<IngestStats> {
 
   const queries = (topics ?? []).map((t: any) => t.query as string);
   const collected: FetchedArticle[] = [];
+
+  // --- Breaking signals from monitored public Telegram channels -------------
+  // Scraped BEFORE the RSS/API fetch so matching stories can be promoted to
+  // breaking priority. Channel posts are signals only, never published as-is.
+  const channelRows = (sources ?? []).filter((s: any) => s.kind === "telegram");
+  const channels = channelRows.length
+    ? channelRows
+        .map((r: any) => String(r.config?.channel ?? r.name ?? "").replace(/^@/, ""))
+        .filter(Boolean)
+    : DEFAULT_TELEGRAM_CHANNELS;
+  let signalTexts: string[] = [];
+  try {
+    const posts = await fetchTelegramSignals(channels);
+    signalTexts = posts
+      .filter((p) => {
+        if (!p.publishedAt) return true;
+        const ts = Date.parse(p.publishedAt);
+        return Number.isNaN(ts) || Date.now() - ts < 6 * 3_600_000;
+      })
+      .map((p) => cleanEditorialText(p.text));
+    stats.signals = signalTexts.length;
+  } catch (err) {
+    stats.errors.push(`telegram signals: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const hasSignal = (text: string) => signalTexts.some((s) => sameEvent(s, text));
 
   // NewsData has a hard daily credit cap, so topics are OR-batched into a few
   // wide queries instead of one request per topic.
@@ -160,6 +193,12 @@ export async function runIngest(): Promise<IngestStats> {
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
 
+    const banned = sourceBanGate(article);
+    if (!banned.ok) {
+      stats.junk += 1;
+      rejects.push(rejectRow(article, key, banned.reason!));
+      continue;
+    }
     const junk = junkGate(article);
     if (!junk.ok) {
       stats.junk += 1;
@@ -170,6 +209,12 @@ export async function runIngest(): Promise<IngestStats> {
     if (!respect.ok) {
       stats.disrespect += 1;
       rejects.push(rejectRow(article, key, respect.reason!));
+      continue;
+    }
+    const relevant = relevanceGate(article);
+    if (!relevant.ok) {
+      stats.offTopic += 1;
+      rejects.push(rejectRow(article, key, relevant.reason!));
       continue;
     }
     const english = englishGate(article);
@@ -287,7 +332,10 @@ export async function runIngest(): Promise<IngestStats> {
       .select("id")
       .single();
 
-    const breaking = isBreaking(category, article.title, settings["breaking_categories"] ?? []);
+    const articleText = `${article.title} ${article.description ?? ""}`;
+    const signalled = hasSignal(articleText);
+    const breaking =
+      isBreaking(category, article.title, settings["breaking_categories"] ?? []) || signalled;
     const leaderStatement = isLeaderStatement(`${article.title} ${article.description ?? ""}`);
     const parts = await scoreParts(
       category,
@@ -309,8 +357,8 @@ export async function runIngest(): Promise<IngestStats> {
       original_published_at: article.publishedAt
         ? new Date(article.publishedAt).toISOString()
         : null,
-      score: parts.total,
-      score_parts: parts,
+      score: parts.total + (signalled ? 150 : 0),
+      score_parts: { ...parts, signalBonus: signalled ? 150 : 0 },
       breaking,
     });
     if (!qErr) {
