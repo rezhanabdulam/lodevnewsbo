@@ -96,7 +96,10 @@ export async function runIngest(): Promise<IngestStats> {
         const ts = Date.parse(p.publishedAt);
         return Number.isNaN(ts) || Date.now() - ts < 6 * 3_600_000;
       })
-      .map((p) => cleanEditorialText(p.text));
+      .map((p) => cleanEditorialText(p.text))
+      // Matching is token-based, so only English-language channel posts can be
+      // aligned with incoming RSS headlines. Arabic posts are ignored here.
+      .filter((text) => isEnglishText(text).ok);
     stats.signals = signalTexts.length;
   } catch (err) {
     stats.errors.push(`telegram signals: ${err instanceof Error ? err.message : String(err)}`);
