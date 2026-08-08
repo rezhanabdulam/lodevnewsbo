@@ -103,6 +103,21 @@ export interface GateResult {
   reason?: string;
 }
 
+/** GATE 0 — banned outlets (Israeli media are never used). */
+export function sourceBanGate(article: FetchedArticle): GateResult {
+  const host = hostOf(article.url);
+  if (BANNED_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`))) {
+    return { ok: false, reason: `banned source: ${host}` };
+  }
+  if (article.sourceName && BANNED_SOURCE_PATTERN.test(article.sourceName)) {
+    return { ok: false, reason: `banned source: ${article.sourceName}` };
+  }
+  if (BANNED_SOURCE_PATTERN.test(article.title)) {
+    return { ok: false, reason: "banned source attribution in title" };
+  }
+  return { ok: true };
+}
+
 /** GATE 1 — junk. Runs before anything else; short-circuits. */
 export function junkGate(article: FetchedArticle): GateResult {
   const host = hostOf(article.url);
@@ -117,14 +132,47 @@ export function junkGate(article: FetchedArticle): GateResult {
   return { ok: true };
 }
 
-/** GATE 2 — respect. */
+/** GATE 2 — respect + pro-Iran editorial line. */
 export function respectGate(article: FetchedArticle): GateResult {
   const text = `${article.title} ${article.description ?? ""}`;
   if (DISRESPECT_PATTERNS.some((p) => p.test(text))) {
-    return { ok: false, reason: "disrespectful content" };
+    return { ok: false, reason: "disrespectful to Kurds/Muslims" };
+  }
+  if (NEGATIVE_IRAN_PATTERNS.some((p) => p.test(text))) {
+    return { ok: false, reason: "demoralising/unsourced negative Iran framing" };
   }
   return { ok: true };
 }
+
+/**
+ * GATE 2b — beat relevance. Every story must touch the Iran–US conflict, its
+ * regional actors, or its economic fallout. Soft news is dropped outright even
+ * when it comes from an approved outlet.
+ */
+const BEAT_PATTERNS: RegExp[] = [
+  /\b(iran|iranian|tehran|irgc|khamenei|pezeshkian|qalibaf|ghalibaf|araghchi|larijani|islamic republic|persian gulf|hormuz)\b/i,
+  /\b(iraq|iraqi|baghdad|basra|mosul|erbil|sulaymaniyah|kurdistan region|najaf|karbala|sistani|sudani|pmf|hashd)\b/i,
+  /\b(hezbollah|houthi|ansar allah|kataib|nujaba|axis of resistance|hamas|militia|proxy|proxies)\b/i,
+  /\b(nuclear|uranium|enrich\w*|iaea|sanction\w*|snapback|jcpoa)\b/i,
+  /\b(centcom|pentagon|us (navy|military|forces|troops)|carrier strike group|airstrike|air strike|missile|drone|ballistic|ceasefire|war|attack|strike)\b/i,
+  /\b(oil|crude|brent|opec|barrel|refinery|tanker|shipping lane|red sea|bab el-?mandeb|gold price|bullion|energy market)\b/i,
+  /\b(middle east|gulf states|saudi|riyadh|qatar|uae|oman|bahrain|kuwait|syria|lebanon|yemen|turkey|ankara)\b/i,
+];
+
+export function relevanceGate(article: FetchedArticle): GateResult {
+  const text = `${article.title} ${article.description ?? ""}`;
+  if (SOFT_NEWS_PATTERNS.some((p) => p.test(text))) {
+    return { ok: false, reason: "off-beat soft news" };
+  }
+  const hits = BEAT_PATTERNS.filter((p) => p.test(text)).length;
+  if (hits === 0) return { ok: false, reason: "unrelated to the conflict beat" };
+  // A lone generic Middle-East mention is not enough on its own.
+  if (hits === 1 && BEAT_PATTERNS[6]!.test(text) && !/iran|iraq|us |u\.s\./i.test(text)) {
+    return { ok: false, reason: "only tangential regional mention" };
+  }
+  return { ok: true };
+}
+
 
 const NON_LATIN_SCRIPT =
   /[\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0700-\u074F\u0900-\u097F\u0980-\u09FF\u0A00-\u0D7F\u0E00-\u0E7F\u10A0-\u10FF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/u;
