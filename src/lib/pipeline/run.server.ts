@@ -583,6 +583,7 @@ export async function runPublish(
     .lt("original_published_at", shelfLife);
 
   const limit = opts.force ?? 1;
+  // Pull a wider candidate pool so related stories can be clustered together.
   let query = supabaseAdmin
     .from("queue")
     .select("*")
@@ -590,11 +591,41 @@ export async function runPublish(
     .order("breaking", { ascending: false })
     .order("score", { ascending: false })
     .order("original_published_at", { ascending: false })
-    .limit(limit);
+    .limit(Math.max(limit * 8, 24));
 
   if (opts.breakingOnly) query = query.eq("breaking", true);
 
-  const { data: items } = await query;
+  const { data: pool } = await query;
+
+  // --- Event clustering -----------------------------------------------------
+  // 2-4 articles describing the same event become ONE message; the most
+  // trusted/complete item leads and the rest contribute source links.
+  const clusters: Array<{ lead: any; members: any[] }> = [];
+  const claimed = new Set<string>();
+  for (const candidate of (pool ?? []) as any[]) {
+    if (claimed.has(candidate.id)) continue;
+    claimed.add(candidate.id);
+    const members = [candidate];
+    for (const other of (pool ?? []) as any[]) {
+      if (claimed.has(other.id) || members.length >= 4) continue;
+      if (sameEvent(`${candidate.headline} ${candidate.summary}`, `${other.headline} ${other.summary}`)) {
+        claimed.add(other.id);
+        members.push(other);
+      }
+    }
+    members.sort(
+      (a, b) =>
+        sourceTrust(a.source_name, a.url) - sourceTrust(b.source_name, b.url) ||
+        (b.summary?.length ?? 0) - (a.summary?.length ?? 0),
+    );
+    clusters.push({ lead: members[0], members });
+    if (clusters.length >= limit) break;
+  }
+
+  const items = clusters.map((c) => ({
+    ...c.lead,
+    _members: c.members,
+  }));
   if (!items || items.length === 0) {
     result.skipped = "queue empty";
     return result;
@@ -680,6 +711,10 @@ export async function runPublish(
         continue;
       }
 
+      const extraSources: PostSource[] = (item._members ?? [])
+        .slice(1)
+        .map((m: any) => ({ name: m.source_name || hostname(m.url), url: m.url }));
+
       const post: OutgoingPost = {
         headline,
         summary,
@@ -690,6 +725,7 @@ export async function runPublish(
         breaking: item.breaking,
         category: item.category,
         timezone: settings["timezone"] ?? "Asia/Baghdad",
+        extraSources,
       };
 
       try {
@@ -717,11 +753,16 @@ export async function runPublish(
       }
     }
 
-    await supabaseAdmin
-      .from("queue")
-      .update({ status: "published" })
-      .eq("id", item.id);
-    result.items.push(item.headline);
+    const memberIds = ((item._members ?? [item]) as any[]).map((m) => m.id);
+    await supabaseAdmin.from("queue").update({ status: "published" }).in("id", memberIds);
+    // Members merged into this post must never resurface as their own story.
+    for (const m of (item._members ?? []) as any[]) {
+      publishedTitles.unshift(m.headline);
+      publishedKeys.add(m.dedup_key);
+    }
+    result.items.push(
+      memberIds.length > 1 ? `${item.headline} (+${memberIds.length - 1} sources)` : item.headline,
+    );
   }
 
   if (!opts.breakingOnly) {
