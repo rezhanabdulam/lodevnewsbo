@@ -226,6 +226,8 @@ export type Database = {
           day_min_minutes: number
           day_start: string
           default_language: string
+          event_cooldown_hours: number
+          event_similarity_threshold: number
           gold_move_threshold: number
           id: number
           last_published_at: string | null
@@ -246,6 +248,8 @@ export type Database = {
           day_min_minutes?: number
           day_start?: string
           default_language?: string
+          event_cooldown_hours?: number
+          event_similarity_threshold?: number
           gold_move_threshold?: number
           id?: number
           last_published_at?: string | null
@@ -266,6 +270,8 @@ export type Database = {
           day_min_minutes?: number
           day_start?: string
           default_language?: string
+          event_cooldown_hours?: number
+          event_similarity_threshold?: number
           gold_move_threshold?: number
           id?: number
           last_published_at?: string | null
