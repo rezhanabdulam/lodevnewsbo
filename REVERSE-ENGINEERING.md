@@ -102,8 +102,9 @@ src/routes/_authenticated/dashboard.tsx  the console
    stripped), falling back to host+day+entity fingerprint. Keys already present
    in `raw_articles` are dropped without further cost.
 
-5. **Classify (AI).** One batched call to `openai/gpt-5.6-sol` labels up to 60
-   items into: `iraq`, `war`, `iran`, `middle-east`, `analysis`, `proxies`,
+5. **Classify (AI).** All fresh candidates are processed in batches of 40.
+   Groq handles high-volume ingest when configured, with `openai/gpt-5.6-sol`
+   as fallback. The classifier labels items into: `iraq`, `war`, `iran`, `middle-east`, `analysis`, `proxies`,
    `gold`, `usa`, `oil`, `economic-impact`, or `none`. Semantic, not keyword —
    a "God of War" article is `none`. If the gateway returns 402/429, a local
    regex classifier (`keywordCategory`) takes over so the pipeline keeps running.
@@ -143,8 +144,9 @@ src/routes/_authenticated/dashboard.tsx  the console
    (both configurable), evaluated in `Asia/Baghdad`.
 3. **Shelf life.** Queued items older than 14h are marked `expired`, never sent.
 4. **Selection.** Top item by `breaking DESC, score DESC, original_published_at DESC`.
-5. **Context dedup.** Compared against the last 200 published headlines (48h)
-   with `sameEvent`; a repeat is marked `duplicate` and skipped silently.
+5. **Context dedup.** Compared against the last 200 headlines published within
+   the configured cooldown (72h by default) with `sameEvent`; a repeat is
+   marked `duplicate` and skipped silently.
 6. **Translation (last step only).** Only the message about to be sent, and only
    for chats whose `language = 'ckb'`, is translated to Kurdish Sorani. Model
    with `google/gemini-3.6-flash`, with an Arabic-script validator that rejects Latin
@@ -153,7 +155,9 @@ src/routes/_authenticated/dashboard.tsx  the console
 7. **Language guard.** Immediately before sending on an English chat, the final
    headline+summary is re-checked with `isEnglishText`; a failure marks the item
    `rejected-language` instead of posting it.
-8. **Send.** HTML-formatted message: category line, bold headline, summary,
+8. **Send.** Every selected queue cluster is atomically claimed as `publishing`
+   before delivery, preventing overlapping cron requests from sending it twice.
+   The HTML-formatted message contains a category line, bold headline, summary,
    italic source + localised timestamp, and a "Read the full report" link.
    With an image it goes as `sendPhoto` (caption ≤1024 chars); if Telegram
    rejects the image it silently falls back to text — no placeholder image.
@@ -176,8 +180,9 @@ src/routes/_authenticated/dashboard.tsx  the console
 - The webhook URL registered with `setWebhook` is the stable dev host,
   `https://project--<project-id>-dev.lovable.app/api/public/telegram/webhook`.
 - **Public-channel ingest** reads `t.me/s/<handle>`. Arabic and Persian signal
-  posts are translated to English in one batch through Groq, clustered by event
-  and admitted as breaking candidates. Admins add channels using a simple `@handle`.
+  posts are translated to English in one batch through Groq. Rapid same-channel,
+  same-speaker bulletins are merged before normal freshness, relevance, respect
+  and event-dedup gates. Admins add channels using a simple `@handle`.
 - **Aggregator hygiene:** Bing redirect URLs are unwrapped to the publisher URL
   before source bans, canonical deduplication and publishing. Embedded old
   “Published/Last Updated” dates override misleading RSS refresh timestamps.
