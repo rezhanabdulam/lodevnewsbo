@@ -106,11 +106,26 @@ export async function runIngest(): Promise<IngestStats> {
       const translated = await translateTelegramToEnglish(foreignIndexes.map((index) => cleaned[index] ?? ""));
       foreignIndexes.forEach((index, translatedIndex) => { cleaned[index] = translated[translatedIndex] ?? cleaned[index] ?? ""; });
     }
-    signalTexts = cleaned.filter((text) => isEnglishText(text).ok);
+    const mergedPosts: Array<{ post: (typeof posts)[number]; text: string }> = [];
     for (let index = 0; index < posts.length; index++) {
       const text = cleaned[index];
       const post = posts[index];
       if (!text || !post || !isEnglishText(text).ok) continue;
+      const previous = mergedPosts.at(-1);
+      const previousTime = previous?.post.publishedAt ? Date.parse(previous.post.publishedAt) : 0;
+      const currentTime = post.publishedAt ? Date.parse(post.publishedAt) : 0;
+      const sameBulletin = previous?.post.channel === post.channel && previousTime && currentTime &&
+        Math.abs(currentTime - previousTime) <= 12 * 60_000 &&
+        eventSimilarityForBulletin(previous.text, text);
+      if (sameBulletin && previous) {
+        previous.text = `${previous.text} ${text}`.slice(0, 1800);
+        if (currentTime > previousTime) previous.post = post;
+      } else {
+        mergedPosts.push({ post, text });
+      }
+    }
+    signalTexts = mergedPosts.map((entry) => entry.text);
+    for (const { post, text } of mergedPosts) {
       collected.push({
         provider: `Telegram/${post.channel}`,
         sourceName: `@${post.channel}`,
@@ -407,6 +422,13 @@ export async function runIngest(): Promise<IngestStats> {
   return stats;
 }
 
+function eventSimilarityForBulletin(a: string, b: string): boolean {
+  const speaker = /\b(khamenei|pezeshkian|qalibaf|araghchi|velayati|barzani|sudani|trump|vance|rubio|hegseth|irgc|foreign minister|oil minister|prime minister|president)\b/i;
+  const left = a.match(speaker)?.[0]?.toLowerCase();
+  const right = b.match(speaker)?.[0]?.toLowerCase();
+  return Boolean(left && right && left === right) || sameEvent(a, b, 0.45);
+}
+
 /** Offline classifier used when the AI gateway is unavailable. */
 function keywordCategory(text: string): Category | null {
   const t = text.toLowerCase();
@@ -685,6 +707,19 @@ export async function runPublish(
   );
 
   for (const item of items as any[]) {
+    const memberIds = ((item._members ?? [item]) as any[]).map((member) => member.id);
+    const { data: claimedRows } = await supabaseAdmin
+      .from("queue")
+      .update({ status: "publishing" })
+      .in("id", memberIds)
+      .eq("status", "queued")
+      .select("id");
+    if ((claimedRows ?? []).length !== memberIds.length) {
+      const claimedIds = (claimedRows ?? []).map((row: any) => row.id);
+      if (claimedIds.length) await supabaseAdmin.from("queue").update({ status: "queued" }).in("id", claimedIds);
+      continue;
+    }
+
     // Editorial guard at send time: banned outlets, off-beat or demoralising
     // items that were queued before the rules tightened never go out.
     const asArticle = {
@@ -701,7 +736,7 @@ export async function runPublish(
       !respectGate(asArticle).ok ||
       !relevanceGate(asArticle).ok;
     if (guard) {
-      await supabaseAdmin.from("queue").update({ status: "rejected-policy" }).eq("id", item.id);
+      await supabaseAdmin.from("queue").update({ status: "rejected-policy" }).in("id", memberIds);
       continue;
     }
 
@@ -710,13 +745,14 @@ export async function runPublish(
       publishedKeys.has(item.dedup_key) ||
       publishedTitles.some((t) => sameEvent(t, item.headline, similarityThreshold));
     if (repeated) {
-      await supabaseAdmin.from("queue").update({ status: "duplicate" }).eq("id", item.id);
+      await supabaseAdmin.from("queue").update({ status: "duplicate" }).in("id", memberIds);
       continue;
     }
 
     // Translate once per item (only for messages actually about to be sent).
     const translationCache = new Map<string, { headline: string; summary: string } | null>();
 
+    let sentThisItem = 0;
     for (const chat of (chats ?? []) as any[]) {
       if (sentToChat.has(`${item.dedup_key}:${chat.chat_id}`)) continue;
 
@@ -791,6 +827,7 @@ export async function runPublish(
           original_published_at: item.original_published_at,
         });
         result.sent += 1;
+        sentThisItem += 1;
         publishedTitles.unshift(item.headline);
         publishedKeys.add(item.dedup_key);
         sentToChat.add(`${item.dedup_key}:${chat.chat_id}`);
@@ -804,8 +841,10 @@ export async function runPublish(
       }
     }
 
-    const memberIds = ((item._members ?? [item]) as any[]).map((m) => m.id);
-    await supabaseAdmin.from("queue").update({ status: "published" }).in("id", memberIds);
+    await supabaseAdmin
+      .from("queue")
+      .update({ status: sentThisItem > 0 ? "published" : "queued" })
+      .in("id", memberIds);
     // Members merged into this post must never resurface as their own story.
     for (const m of (item._members ?? []) as any[]) {
       publishedTitles.unshift(m.headline);
