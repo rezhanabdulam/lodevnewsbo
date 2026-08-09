@@ -36,6 +36,34 @@ async function chat(
   return json.choices?.[0]?.message?.content ?? "";
 }
 
+async function groqChat(messages: Array<{ role: string; content: string }>): Promise<string> {
+  const key = process.env["GROQ_API_KEY"];
+  if (!key) throw new Error("Missing GROQ_API_KEY");
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, temperature: 0 }),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`Groq ${res.status}: ${body.slice(0, 240)}`);
+  const json = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content ?? "";
+}
+
+export async function translateTelegramToEnglish(texts: string[]): Promise<string[]> {
+  if (texts.length === 0) return [];
+  const raw = await groqChat([
+    {
+      role: "system",
+      content: "Translate Arabic or Persian breaking-news posts into concise professional English. Preserve names, numbers, attribution and factual uncertainty. Remove only labels such as عاجل. Return ONLY a JSON array of strings in the same order. Never summarize away facts.",
+    },
+    { role: "user", content: JSON.stringify(texts) },
+  ]);
+  const parsed = extractJson(raw);
+  if (!Array.isArray(parsed) || parsed.length !== texts.length) throw new Error("Telegram translation shape mismatch");
+  return parsed.map((value) => String(value).trim());
+}
+
 function extractJson(text: string): unknown {
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
   const start = cleaned.search(/[[{]/);
@@ -143,8 +171,6 @@ export function isBreaking(
 
 const TRANSLATION_MODELS = [
   "google/gemini-3.6-flash",
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-pro",
 ];
 
 /** Allowed for Kurdish Sorani: Arabic-script ranges + punctuation, digits, emoji, whitespace. */

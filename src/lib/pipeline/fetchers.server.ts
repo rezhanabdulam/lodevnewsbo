@@ -73,6 +73,20 @@ function hostLabel(url: string): string | null {
   }
 }
 
+/** Bing RSS wraps the real publisher URL in `url=`. Never publish its redirect. */
+function unwrapAggregatorUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (/(^|\.)bing\.com$/i.test(url.hostname)) {
+      const target = url.searchParams.get("url");
+      if (target?.startsWith("http")) return target;
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
 function parseRssItems(
   xml: string,
   provider: string,
@@ -82,8 +96,9 @@ function parseRssItems(
   return items
     .map((block): FetchedArticle | null => {
       const title = tag(block, "title");
-      const link = tag(block, "link");
-      if (!title || !link) return null;
+      const rawLink = tag(block, "link");
+      if (!title || !rawLink) return null;
+      const link = unwrapAggregatorUrl(rawLink);
       const rawSource = tag(block, "source") ?? fallbackSource;
       const source =
         rawSource && !/bing|google|news\.google|msn/i.test(rawSource)

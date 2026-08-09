@@ -339,6 +339,19 @@ function Dashboard() {
               Next scheduled post:{" "}
               {s["next_publish_at"] ? new Date(s["next_publish_at"]).toLocaleString() : "as soon as the queue fills"}
             </p>
+            <Separator />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="cooldown">Event cooldown (hours)</Label>
+                <Input id="cooldown" type="number" min="1" max="336" defaultValue={s["event_cooldown_hours"] ?? 72}
+                  onBlur={(e) => mSettings.mutate({ event_cooldown_hours: Number(e.target.value) })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="similarity">Similarity threshold</Label>
+                <Input id="similarity" type="number" min="0.3" max="0.9" step="0.01" defaultValue={s["event_similarity_threshold"] ?? 0.52}
+                  onBlur={(e) => mSettings.mutate({ event_similarity_threshold: Number(e.target.value) })} />
+              </div>
+            </div>
           </Panel>
         </TabsContent>
 
@@ -385,7 +398,7 @@ function Dashboard() {
 
         {/* SOURCES */}
         <TabsContent value="sources" className="mt-4 space-y-4">
-          <Panel title="Providers" hint="Add another provider by inserting a row — no redeploy needed.">
+          <Panel title="Providers" hint="For Telegram, enter a public @channel handle and choose Telegram channel.">
             {data.sources.map((src: any) => (
               <div key={src.id} className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3">
                 <div className="min-w-44 flex-1">
@@ -516,8 +529,12 @@ function AddSource({
   const [secretRef, setSecretRef] = useState("");
   return (
     <div className="flex flex-wrap gap-2">
-      <Input className="max-w-48" placeholder="Provider name" value={name} onChange={(e) => setName(e.target.value)} />
-      <Input className="max-w-40" placeholder="kind (rss/newsdata)" value={kind} onChange={(e) => setKind(e.target.value)} />
+      <Input className="max-w-48" placeholder={kind === "telegram" ? "@channel" : "Provider name"} value={name} onChange={(e) => setName(e.target.value)} />
+      <select className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={kind} onChange={(e) => setKind(e.target.value)}>
+        <option value="rss">RSS provider</option>
+        <option value="newsdata">NewsData</option>
+        <option value="telegram">Telegram channel</option>
+      </select>
       <Input className="max-w-48" placeholder="SECRET_NAME (optional)" value={secretRef} onChange={(e) => setSecretRef(e.target.value)} />
       <Button
         size="sm" variant="secondary"
