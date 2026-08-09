@@ -36,6 +36,34 @@ async function chat(
   return json.choices?.[0]?.message?.content ?? "";
 }
 
+async function groqChat(messages: Array<{ role: string; content: string }>): Promise<string> {
+  const key = process.env["GROQ_API_KEY"];
+  if (!key) throw new Error("Missing GROQ_API_KEY");
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: "llama-3.3-70b-versatile", messages, temperature: 0 }),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`Groq ${res.status}: ${body.slice(0, 240)}`);
+  const json = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content ?? "";
+}
+
+export async function translateTelegramToEnglish(texts: string[]): Promise<string[]> {
+  if (texts.length === 0) return [];
+  const raw = await groqChat([
+    {
+      role: "system",
+      content: "Translate Arabic or Persian breaking-news posts into concise professional English. Preserve names, numbers, attribution and factual uncertainty. Remove only labels such as عاجل. Return ONLY a JSON array of strings in the same order. Never summarize away facts.",
+    },
+    { role: "user", content: JSON.stringify(texts) },
+  ]);
+  const parsed = extractJson(raw);
+  if (!Array.isArray(parsed) || parsed.length !== texts.length) throw new Error("Telegram translation shape mismatch");
+  return parsed.map((value) => String(value).trim());
+}
+
 function extractJson(text: string): unknown {
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
   const start = cleaned.search(/[[{]/);
@@ -66,7 +94,7 @@ export async function classifyBatch(
     .map((it, i) => `${i + 1}. ${it.title}\n   ${(it.description ?? "").slice(0, 300)}`)
     .join("\n");
 
-  const raw = await chat("openai/gpt-5.6-sol", [
+  const messages = [
     {
       role: "system",
       content: `You classify English-language news for an Iraqi audience covering Iraq first, Iran and Iranian perspectives, the Iran-US conflict, and major Middle East events. Categories:${CATEGORY_GUIDE}
@@ -74,10 +102,21 @@ Judge meaning, not keywords: a "God of War" game article is "none", not war.
 Reply with ONLY a JSON array of strings, one per numbered item, in order.`,
     },
     { role: "user", content: numbered },
-  ]);
+  ];
+  const raw = process.env["GROQ_API_KEY"]
+    ? await groqChat(messages)
+    : await chat("openai/gpt-5.6-sol", messages);
 
-  const parsed = extractJson(raw);
-  if (!Array.isArray(parsed)) throw new Error("classification not an array");
+  let parsed: unknown[];
+  try {
+    const json = extractJson(raw);
+    if (!Array.isArray(json)) throw new Error("classification not an array");
+    parsed = json;
+  } catch {
+    const labels = raw.toLowerCase().match(/\b(?:middle-east|economic-impact|iraq|analysis|war|iran|proxies|usa|oil|gold|none)\b/g) ?? [];
+    if (labels.length < items.length) throw new Error("classification output could not be recovered");
+    parsed = labels.slice(-items.length);
+  }
   return items.map((_, i) => {
     const v = String(parsed[i] ?? "none").trim().toLowerCase();
     return (CATEGORIES as string[]).includes(v) ? (v as Category) : null;
@@ -94,7 +133,7 @@ export async function rewrite(item: {
   description: string | null;
   sourceName: string | null;
 }): Promise<Rewritten> {
-  const raw = await chat("openai/gpt-5.6-sol", [
+  const messages = [
     {
       role: "system",
       content: `You are a wire editor. Return ONLY JSON: {"headline": string, "summary": string}.
@@ -115,16 +154,52 @@ Rules:
       role: "user",
       content: `Source: ${item.sourceName ?? "unknown"}\nHeadline: ${item.title}\nBody: ${(item.description ?? "").slice(0, 1500)}`,
     },
-  ]);
+  ];
+  const raw = process.env["GROQ_API_KEY"]
+    ? await groqChat(messages)
+    : await chat("openai/gpt-5.6-sol", messages);
 
   const parsed = extractJson(raw) as { headline?: string; summary?: string };
   const headline = (parsed.headline ?? item.title).trim();
   let summary = (parsed.summary ?? item.description ?? "").trim();
   if (/(\.\.\.|…)$/.test(summary)) {
-    summary = summary.replace(/(\.\.\.|…)$/, "").replace(/[^.!?]*$/, "").trim();
+    const withoutEllipsis = summary.replace(/(\.\.\.|…)$/, "").trim();
+    const lastCompleteSentence = withoutEllipsis.match(/^([\s\S]*[.!?])\s+[^.!?]*$/)?.[1];
+    summary = (lastCompleteSentence ?? withoutEllipsis).trim();
   }
   if (!/[.!?]$/.test(summary) && summary.length > 0) summary += ".";
   return { headline, summary };
+}
+
+/** Rewrites a whole ingest batch in one request instead of one paid call per article. */
+export async function rewriteBatch(items: Array<{
+  title: string;
+  description: string | null;
+  sourceName: string | null;
+}>): Promise<Rewritten[]> {
+  if (items.length === 0) return [];
+  const messages = [
+    {
+      role: "system",
+      content: `You are a wire editor for an Iraqi, Muslim, pro-Iran regional news channel. Return ONLY a JSON array with one {"headline": string, "summary": string} object per input, in order.
+Headline: factual, under 110 characters, no clickbait or feed labels.
+Summary: 2-3 complete standalone sentences, ending normally; include who did what, where, and why it matters. Never end with an ellipsis or an unfinished clause. Attribute disputed claims. Do not add facts. Do not adopt hostile or demoralising framing about Iran. Professional English only.`,
+    },
+    { role: "user", content: JSON.stringify(items.map((item) => ({ ...item, description: item.description?.slice(0, 1200) ?? null }))) },
+  ];
+  const raw = process.env["GROQ_API_KEY"]
+    ? await groqChat(messages)
+    : await chat("openai/gpt-5.6-sol", messages);
+  const parsed = extractJson(raw);
+  if (!Array.isArray(parsed) || parsed.length !== items.length) throw new Error("rewrite batch shape mismatch");
+  return parsed.map((value, index) => {
+    const row = value as { headline?: string; summary?: string };
+    const fallback = items[index];
+    return {
+      headline: String(row.headline ?? fallback?.title ?? "").trim(),
+      summary: String(row.summary ?? fallback?.description ?? "").trim(),
+    };
+  });
 }
 
 /** Breaking-news judgement for a single classified item. */
@@ -143,8 +218,6 @@ export function isBreaking(
 
 const TRANSLATION_MODELS = [
   "google/gemini-3.6-flash",
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-pro",
 ];
 
 /** Allowed for Kurdish Sorani: Arabic-script ranges + punctuation, digits, emoji, whitespace. */
@@ -153,8 +226,9 @@ const SORANI_ALLOWED =
 
 export function validateSorani(text: string): boolean {
   if (!text.trim()) return false;
-  if (/[A-Za-z]{3,}/.test(text)) return false;
-  return SORANI_ALLOWED.test(text);
+  const withoutAcronyms = text.replace(/\b[A-Z][A-Z0-9.-]{1,7}\b/g, "");
+  if (/[A-Za-z]{3,}/.test(withoutAcronyms)) return false;
+  return SORANI_ALLOWED.test(withoutAcronyms);
 }
 
 export interface TranslationResult {

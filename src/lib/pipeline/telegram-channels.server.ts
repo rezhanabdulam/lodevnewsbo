@@ -34,6 +34,10 @@ export interface ChannelPost {
   publishedAt: string | null;
 }
 
+export function isArabicOrPersian(text: string): boolean {
+  return /[\u0600-\u06ff]/u.test(text);
+}
+
 /**
  * Reads the public web preview of a channel (https://t.me/s/<name>).
  * No bot membership or API key required; failures are non-fatal.

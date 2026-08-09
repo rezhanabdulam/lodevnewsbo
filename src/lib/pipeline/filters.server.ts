@@ -47,6 +47,8 @@ export const JUNK_TITLE_PATTERNS: RegExp[] = [
   /\bgiveaway|sweepstake\b/i,
   /\bwatch (live|online) free\b/i,
   /\b(live updates?|live blog|as it happened)\b/i,
+  /\b(in focus|weekly roundup|week in review|sunday shows? preview|podcast|episode)\b/i,
+  /\b(election|primary|candidate|hopefuls?|campaign)\b[^.]{0,60}\biran war\b/i,
 ];
 
 /**
@@ -59,6 +61,8 @@ export const SOFT_NEWS_PATTERNS: RegExp[] = [
   /\b(recipe|cuisine|restaurant|tourism|tourist|travel guide|hotel|resort|nowruz celebration|fashion|celebrity|royal family|dating|horoscope)\b/i,
   /\b(earthquake drill|weather forecast|air pollution index|traffic accident|road crash|bus crash|train derail)\b/i,
   /\b(school shooting|mass shooting)\b/i,
+  /\b(caspian sea convention|delimitation of (the )?(seabed|subsoil)|urmia lake)\b/i,
+  /\b(ai kill switch|flock cams|congressional district|special election)\b/i,
 ];
 
 /** Slurs / dehumanising phrasing aimed at Kurds or Muslims. */
@@ -87,6 +91,7 @@ export const NEGATIVE_IRAN_PATTERNS: RegExp[] = [
   /\b(uprising|revolt|protests?)\b[^.]{0,40}\b(topple|overthrow|end of the (regime|islamic republic))\b/i,
   /\bpost[- ]?(khamenei|islamic republic) (iran|era)\b/i,
   /\b(report claims?|a report claims?|sources? claim|rumou?rs? (say|claim|suggest))\b[^.]{0,60}\b(die|death|dead|dying|assassinat\w+|flee|fled)\b/i,
+  /\biran(?:ian|'s)?\b[^.]{0,80}\b(propaganda|brainwash\w*|deception|disinformation machine|war spectacle)\b/i,
 ];
 
 
@@ -170,6 +175,11 @@ export function relevanceGate(article: FetchedArticle): GateResult {
   if (hits === 1 && BEAT_PATTERNS[6]!.test(text) && !/iran|iraq|us |u\.s\./i.test(text)) {
     return { ok: false, reason: "only tangential regional mention" };
   }
+  const genericWarMention = /\biran war\b/i.test(text);
+  const concreteEvent = /\b(attack|strike|missile|drone|killed|wounded|ceasefire|agreement|talks|negotiat|sanction|export|oil|hormuz|nuclear|military|government|minister|president|leader|commander|parliament|statement|announc|warn|percent|%)\b/i.test(text);
+  if (genericWarMention && !concreteEvent) {
+    return { ok: false, reason: "Iran war is only a passing mention" };
+  }
   return { ok: true };
 }
 
@@ -227,6 +237,7 @@ export function freshnessGate(
   const ts = Date.parse(article.publishedAt);
   if (Number.isNaN(ts)) return { ok: false, reason: "unparseable publish date" };
   const ageHours = (Date.now() - ts) / 3_600_000;
+  if (ageHours < -1) return { ok: false, reason: "publish date is in the future" };
   if (ageHours > maxAgeHours) {
     return { ok: false, reason: `stale (${Math.round(ageHours)}h old)` };
   }
@@ -314,6 +325,10 @@ const EVENT_ALIASES: Array<[RegExp, string]> = [
   [/\b(stockpiles?|inventor(?:y|ies)|running low|shortages?)\b/gi, "stockpile"],
   [/\b(clash(?:ed)?|confront(?:ed|ation)?|disput(?:e|ed)|den(?:y|ies|ied))\b/gi, "dispute"],
   [/\b(strik(?:e|es|ing)|attack(?:s|ed)?|bomb(?:s|ed|ing)?|hit(?:s)?)\b/gi, "attack"],
+  [/\b(reopen(?:ing)?|open(?:ing)?|restore(?:d|s)? access)\b/gi, "reopen"],
+  [/\b(deal|agreement|memorandum|understanding|talks?|negotiations?)\b/gi, "agreement"],
+  [/\b(ship|vessel|tanker)\b/gi, "vessel"],
+  [/\b(conditions?|demands?|terms?|requirements?)\b/gi, "condition"],
 ];
 
 function eventTokens(text: string): Set<string> {
@@ -332,8 +347,17 @@ export function eventSimilarity(a: string, b: string): number {
   return containment * 0.7 + (union ? shared / union : 0) * 0.3;
 }
 
-export function sameEvent(a: string, b: string): boolean {
-  return titleSimilarity(a, b) >= 0.52 || eventSimilarity(a, b) >= 0.56;
+export function sameEvent(a: string, b: string, threshold = 0.52): boolean {
+  const semanticThreshold = Math.min(0.78, threshold + 0.04);
+  return titleSimilarity(a, b) >= threshold || eventSimilarity(a, b) >= semanticThreshold;
+}
+
+/** Reject feed snippets that visibly stop mid-thought. */
+export function hasIncompleteSummary(text: string): boolean {
+  const value = text.trim();
+  if (!value) return true;
+  if (/(?:\.\.\.|…)$/.test(value)) return true;
+  return value.length > 120 && !/[.!?"”']$/.test(value);
 }
 
 const NAMED_ENTITIES: Record<string, string> = {

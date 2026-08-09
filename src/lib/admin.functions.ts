@@ -57,6 +57,8 @@ const settingsSchema = z.object({
   oil_move_threshold: z.number().min(0).max(100).optional(),
   gold_move_threshold: z.number().min(0).max(100).optional(),
   timezone: z.string().min(2).max(64).optional(),
+  event_cooldown_hours: z.number().int().min(1).max(336).optional(),
+  event_similarity_threshold: z.number().min(0.3).max(0.9).optional(),
 });
 
 export const saveSettings = createServerFn({ method: "POST" })
@@ -140,7 +142,7 @@ export const upsertSource = createServerFn({ method: "POST" })
       .object({
         id: z.string().uuid().optional(),
         name: z.string().min(2).max(60).optional(),
-        kind: z.string().min(2).max(30).optional(),
+        kind: z.enum(["rss", "newsdata", "telegram"]).optional(),
         secret_ref: z.string().max(60).nullable().optional(),
         priority: z.number().int().min(1).max(999).optional(),
         daily_quota: z.number().int().min(0).max(1_000_000).nullable().optional(),

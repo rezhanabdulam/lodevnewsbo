@@ -62,6 +62,16 @@ function tag(block: string, name: string): string | null {
   return m?.[1] ? decodeEntities(m[1]) : null;
 }
 
+function effectivePublishedAt(rssDate: string | null, text: string): string | null {
+  if (!rssDate) return null;
+  const rssTs = Date.parse(rssDate);
+  const match = text.match(/(?:published|last updated|updated)\s*(?:by[^,]{0,80},)?\s*[:\-]?\s*([A-Z][a-z]{2,8}\s+\d{1,2},?\s+20\d{2})/i);
+  if (!match?.[1]) return rssDate;
+  const embeddedTs = Date.parse(match[1]);
+  if (Number.isNaN(embeddedTs) || Number.isNaN(rssTs)) return rssDate;
+  return embeddedTs < rssTs - 12 * 3_600_000 ? new Date(embeddedTs).toISOString() : rssDate;
+}
+
 /** Human-readable outlet label derived from the article URL. */
 function hostLabel(url: string): string | null {
   try {
@@ -70,6 +80,20 @@ function hostLabel(url: string): string | null {
     return host;
   } catch {
     return null;
+  }
+}
+
+/** Bing RSS wraps the real publisher URL in `url=`. Never publish its redirect. */
+function unwrapAggregatorUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (/(^|\.)bing\.com$/i.test(url.hostname)) {
+      const target = url.searchParams.get("url");
+      if (target?.startsWith("http")) return target;
+    }
+    return raw;
+  } catch {
+    return raw;
   }
 }
 
@@ -82,9 +106,11 @@ function parseRssItems(
   return items
     .map((block): FetchedArticle | null => {
       const title = tag(block, "title");
-      const link = tag(block, "link");
-      if (!title || !link) return null;
+      const rawLink = tag(block, "link");
+      if (!title || !rawLink) return null;
+      const link = unwrapAggregatorUrl(rawLink);
       const rawSource = tag(block, "source") ?? fallbackSource;
+      const description = tag(block, "description");
       const source =
         rawSource && !/bing|google|news\.google|msn/i.test(rawSource)
           ? rawSource
@@ -94,9 +120,9 @@ function parseRssItems(
         sourceName: source,
         url: link,
         title,
-        description: tag(block, "description"),
+        description,
         imageUrl: null,
-        publishedAt: tag(block, "pubDate"),
+        publishedAt: effectivePublishedAt(tag(block, "pubDate"), `${title} ${description ?? ""}`),
       };
     })
     .filter((a): a is FetchedArticle => a !== null);

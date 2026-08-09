@@ -45,7 +45,8 @@ client and bypasses RLS.
 DB functions: `is_admin(uuid)` (security definer, used by RLS),
 `claim_first_admin()` (auth trigger), `touch_updated_at()`.
 
-Queue `status` values: `queued`, `sent`, `duplicate`, `expired`, `rejected-language`.
+Queue `status` values: `queued`, `publishing`, `published`, `duplicate`, `expired`,
+`rejected-language`, and `rejected-policy`.
 
 ---
 
@@ -102,19 +103,20 @@ src/routes/_authenticated/dashboard.tsx  the console
    stripped), falling back to host+day+entity fingerprint. Keys already present
    in `raw_articles` are dropped without further cost.
 
-5. **Classify (AI).** One batched call to `openai/gpt-5.6-sol` labels up to 60
-   items into: `iraq`, `war`, `iran`, `middle-east`, `analysis`, `proxies`,
+5. **Classify (AI).** All fresh candidates are processed in batches of 40.
+   Groq handles high-volume ingest when configured, with `openai/gpt-5.6-sol`
+   as fallback. The classifier labels items into: `iraq`, `war`, `iran`, `middle-east`, `analysis`, `proxies`,
    `gold`, `usa`, `oil`, `economic-impact`, or `none`. Semantic, not keyword —
    a "God of War" article is `none`. If the gateway returns 402/429, a local
    regex classifier (`keywordCategory`) takes over so the pipeline keeps running.
 
 6. **Event-level dedup.** New titles are compared against the last 100 queued
-   headlines with `sameEvent` (Jaccard ≥0.52 **or** alias-normalised event
-   similarity ≥0.56). Aliases fold "Donald Trump"/"Trump", "US"/"United States",
-   "strike"/"attack"/"bomb", etc. On a collision, the higher-trust source wins
-   and replaces the queued row.
+   headlines with configurable token and alias-normalised event similarity.
+   Aliases fold names, countries, attacks, negotiations, conditions, vessels and
+   Hormuz terminology. The configured cooldown (default 72h) also checks sent
+   headlines across day/night boundaries. On a collision, the higher-trust source wins.
 
-7. **Rewrite (AI).** `openai/gpt-5.6-sol` produces a clean factual headline
+7. **Rewrite (AI).** One batched request produces clean factual headlines
    (<110 chars) plus a 2–3 sentence summary that adds information, keeps
    one-sided claims attributed ("Iran says…", "Israel says…"), drops
    publisher labels, and avoids India-only retail gold prices.
@@ -143,18 +145,20 @@ src/routes/_authenticated/dashboard.tsx  the console
    (both configurable), evaluated in `Asia/Baghdad`.
 3. **Shelf life.** Queued items older than 14h are marked `expired`, never sent.
 4. **Selection.** Top item by `breaking DESC, score DESC, original_published_at DESC`.
-5. **Context dedup.** Compared against the last 200 published headlines (48h)
-   with `sameEvent`; a repeat is marked `duplicate` and skipped silently.
+5. **Context dedup.** Compared against the last 200 headlines published within
+   the configured cooldown (72h by default) with `sameEvent`; a repeat is
+   marked `duplicate` and skipped silently.
 6. **Translation (last step only).** Only the message about to be sent, and only
    for chats whose `language = 'ckb'`, is translated to Kurdish Sorani. Model
-   chain: `google/gemini-3.6-flash` → `google/gemini-2.5-flash` →
-   `google/gemini-2.5-pro`, with an Arabic-script validator that rejects Latin
+   with `google/gemini-3.6-flash`, with an Arabic-script validator that rejects Latin
    leakage. Result is cached per item. On failure the **English text is sent**
    and the attempt is logged to `translation_failures`.
 7. **Language guard.** Immediately before sending on an English chat, the final
    headline+summary is re-checked with `isEnglishText`; a failure marks the item
    `rejected-language` instead of posting it.
-8. **Send.** HTML-formatted message: category line, bold headline, summary,
+8. **Send.** Every selected queue cluster is atomically claimed as `publishing`
+   before delivery, preventing overlapping cron requests from sending it twice.
+   The HTML-formatted message contains a category line, bold headline, summary,
    italic source + localised timestamp, and a "Read the full report" link.
    With an image it goes as `sendPhoto` (caption ≤1024 chars); if Telegram
    rejects the image it silently falls back to text — no placeholder image.
@@ -176,6 +180,13 @@ src/routes/_authenticated/dashboard.tsx  the console
   derived as base64url(SHA-256(`telegram-webhook:<token>`)).
 - The webhook URL registered with `setWebhook` is the stable dev host,
   `https://project--<project-id>-dev.lovable.app/api/public/telegram/webhook`.
+- **Public-channel ingest** reads `t.me/s/<handle>`. Arabic and Persian signal
+  posts are translated to English in one batch through Groq. Rapid same-channel,
+  same-speaker bulletins are merged before normal freshness, relevance, respect
+  and event-dedup gates. Admins add channels using a simple `@handle`.
+- **Aggregator hygiene:** Bing redirect URLs are unwrapped to the publisher URL
+  before source bans, canonical deduplication and publishing. Embedded old
+  “Published/Last Updated” dates override misleading RSS refresh timestamps.
 
 ---
 
@@ -213,6 +224,7 @@ manual "Run ingest" / "Run publish" / "Register webhook" actions.
   ground reliably. `fetchGoogleNewsRss` remains in the codebase and can be
   re-enabled if the app is ever moved behind a residential/proxy egress.
 - **NewsData free tier = 200 credits/day.** Hence the OR-batching and 2-calls-per-run cap.
-- **AI Gateway 402** (credits exhausted) degrades the pipeline gracefully:
-  keyword classification, no rewriting, no translation — original headlines flow.
+- Classification and rewriting are batched and prefer the configured Groq key,
+  avoiding the former one-request-per-article quota drain. Lovable AI remains the
+  fallback; Sorani Gemini is called only for a final message going to a Sorani chat.
 - Telegram cannot enumerate the bot's channels; chats only appear after activity.
