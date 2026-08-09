@@ -107,8 +107,16 @@ Reply with ONLY a JSON array of strings, one per numbered item, in order.`,
     ? await groqChat(messages)
     : await chat("openai/gpt-5.6-sol", messages);
 
-  const parsed = extractJson(raw);
-  if (!Array.isArray(parsed)) throw new Error("classification not an array");
+  let parsed: unknown[];
+  try {
+    const json = extractJson(raw);
+    if (!Array.isArray(json)) throw new Error("classification not an array");
+    parsed = json;
+  } catch {
+    const labels = raw.toLowerCase().match(/\b(?:middle-east|economic-impact|iraq|analysis|war|iran|proxies|usa|oil|gold|none)\b/g) ?? [];
+    if (labels.length < items.length) throw new Error("classification output could not be recovered");
+    parsed = labels.slice(-items.length);
+  }
   return items.map((_, i) => {
     const v = String(parsed[i] ?? "none").trim().toLowerCase();
     return (CATEGORIES as string[]).includes(v) ? (v as Category) : null;

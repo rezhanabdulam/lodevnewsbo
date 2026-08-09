@@ -288,22 +288,32 @@ export async function runIngest(): Promise<IngestStats> {
   // GATE 3 — semantic classification (keyword fallback when the AI is unavailable)
   let categories: Array<Category | null> = [];
   let rewritten: Array<{ headline: string; summary: string }> = [];
-  let aiDown = false;
+  let rewriteDown = false;
   if (fresh.length) {
-    const batch = fresh.slice(0, 60);
-    try {
-      categories = await classifyBatch(
-        batch.map((s) => ({ title: s.article.title, description: s.article.description })),
-      );
-      rewritten = await rewriteBatch(
-        batch.map((s) => ({ title: s.article.title, description: s.article.description, sourceName: s.article.sourceName })),
-      );
-    } catch (err) {
-      stats.errors.push(`classification: ${err instanceof Error ? err.message : String(err)}`);
-      aiDown = true;
-      categories = batch.map((s) =>
-        keywordCategory(`${s.article.title} ${s.article.description ?? ""}`),
-      );
+    for (let offset = 0; offset < fresh.length; offset += 40) {
+      const batch = fresh.slice(offset, offset + 40);
+      try {
+        categories.push(...await classifyBatch(
+          batch.map((s) => ({ title: s.article.title, description: s.article.description })),
+        ));
+      } catch (err) {
+        stats.errors.push(`classification: ${err instanceof Error ? err.message : String(err)}`);
+        categories.push(...batch.map((s) =>
+          keywordCategory(`${s.article.title} ${s.article.description ?? ""}`),
+        ));
+      }
+      try {
+        rewritten.push(...await rewriteBatch(
+          batch.map((s) => ({ title: s.article.title, description: s.article.description, sourceName: s.article.sourceName })),
+        ));
+      } catch (err) {
+        rewriteDown = true;
+        stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
+        rewritten.push(...batch.map((s) => ({
+          headline: s.article.title,
+          summary: s.article.description ?? "",
+        })));
+      }
     }
   }
 
@@ -349,7 +359,7 @@ export async function runIngest(): Promise<IngestStats> {
 
     let headline = article.title;
     let summary = article.description ?? "";
-    if (!aiDown && rewritten[i]) {
+    if (!rewriteDown && rewritten[i]) {
       headline = rewritten[i]!.headline;
       summary = rewritten[i]!.summary;
     }
