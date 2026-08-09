@@ -94,7 +94,7 @@ export async function classifyBatch(
     .map((it, i) => `${i + 1}. ${it.title}\n   ${(it.description ?? "").slice(0, 300)}`)
     .join("\n");
 
-  const raw = await chat("openai/gpt-5.6-sol", [
+  const messages = [
     {
       role: "system",
       content: `You classify English-language news for an Iraqi audience covering Iraq first, Iran and Iranian perspectives, the Iran-US conflict, and major Middle East events. Categories:${CATEGORY_GUIDE}
@@ -102,7 +102,10 @@ Judge meaning, not keywords: a "God of War" game article is "none", not war.
 Reply with ONLY a JSON array of strings, one per numbered item, in order.`,
     },
     { role: "user", content: numbered },
-  ]);
+  ];
+  const raw = process.env["GROQ_API_KEY"]
+    ? await groqChat(messages)
+    : await chat("openai/gpt-5.6-sol", messages);
 
   const parsed = extractJson(raw);
   if (!Array.isArray(parsed)) throw new Error("classification not an array");
@@ -122,7 +125,7 @@ export async function rewrite(item: {
   description: string | null;
   sourceName: string | null;
 }): Promise<Rewritten> {
-  const raw = await chat("openai/gpt-5.6-sol", [
+  const messages = [
     {
       role: "system",
       content: `You are a wire editor. Return ONLY JSON: {"headline": string, "summary": string}.
@@ -143,7 +146,10 @@ Rules:
       role: "user",
       content: `Source: ${item.sourceName ?? "unknown"}\nHeadline: ${item.title}\nBody: ${(item.description ?? "").slice(0, 1500)}`,
     },
-  ]);
+  ];
+  const raw = process.env["GROQ_API_KEY"]
+    ? await groqChat(messages)
+    : await chat("openai/gpt-5.6-sol", messages);
 
   const parsed = extractJson(raw) as { headline?: string; summary?: string };
   const headline = (parsed.headline ?? item.title).trim();
@@ -153,6 +159,37 @@ Rules:
   }
   if (!/[.!?]$/.test(summary) && summary.length > 0) summary += ".";
   return { headline, summary };
+}
+
+/** Rewrites a whole ingest batch in one request instead of one paid call per article. */
+export async function rewriteBatch(items: Array<{
+  title: string;
+  description: string | null;
+  sourceName: string | null;
+}>): Promise<Rewritten[]> {
+  if (items.length === 0) return [];
+  const messages = [
+    {
+      role: "system",
+      content: `You are a wire editor for an Iraqi, Muslim, pro-Iran regional news channel. Return ONLY a JSON array with one {"headline": string, "summary": string} object per input, in order.
+Headline: factual, under 110 characters, no clickbait or feed labels.
+Summary: 2-3 complete standalone sentences, ending normally; include who did what, where, and why it matters. Never end with an ellipsis or an unfinished clause. Attribute disputed claims. Do not add facts. Do not adopt hostile or demoralising framing about Iran. Professional English only.`,
+    },
+    { role: "user", content: JSON.stringify(items.map((item) => ({ ...item, description: item.description?.slice(0, 1200) ?? null }))) },
+  ];
+  const raw = process.env["GROQ_API_KEY"]
+    ? await groqChat(messages)
+    : await chat("openai/gpt-5.6-sol", messages);
+  const parsed = extractJson(raw);
+  if (!Array.isArray(parsed) || parsed.length !== items.length) throw new Error("rewrite batch shape mismatch");
+  return parsed.map((value, index) => {
+    const row = value as { headline?: string; summary?: string };
+    const fallback = items[index];
+    return {
+      headline: String(row.headline ?? fallback?.title ?? "").trim(),
+      summary: String(row.summary ?? fallback?.description ?? "").trim(),
+    };
+  });
 }
 
 /** Breaking-news judgement for a single classified item. */

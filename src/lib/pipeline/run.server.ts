@@ -13,17 +13,20 @@ import {
   sourceBanGate,
   isLeaderStatement,
   isEnglishText,
+  hasIncompleteSummary,
 } from "./filters.server";
 import {
   classifyBatch,
   isBreaking,
-  rewrite,
+  rewriteBatch,
+  translateTelegramToEnglish,
   translateToSorani,
 } from "./ai.server";
 import { sendPost, type OutgoingPost, type PostSource } from "./telegram.server";
 import {
   DEFAULT_TELEGRAM_CHANNELS,
   fetchTelegramSignals,
+  isArabicOrPersian,
 } from "./telegram-channels.server";
 import { CATEGORY_PRIORITY, type Category, type FetchedArticle } from "./types";
 
@@ -89,22 +92,41 @@ export async function runIngest(): Promise<IngestStats> {
     : DEFAULT_TELEGRAM_CHANNELS;
   let signalTexts: string[] = [];
   try {
-    const posts = await fetchTelegramSignals(channels);
-    signalTexts = posts
+    const posts = (await fetchTelegramSignals(channels))
       .filter((p) => {
         if (!p.publishedAt) return true;
         const ts = Date.parse(p.publishedAt);
         return Number.isNaN(ts) || Date.now() - ts < 6 * 3_600_000;
-      })
-      .map((p) => cleanEditorialText(p.text))
-      // Matching is token-based, so only English-language channel posts can be
-      // aligned with incoming RSS headlines. Arabic posts are ignored here.
-      .filter((text) => isEnglishText(text).ok);
+      });
+    const cleaned = posts.map((post) => cleanEditorialText(post.text));
+    const foreignIndexes = cleaned
+      .map((text, index) => (isArabicOrPersian(text) ? index : -1))
+      .filter((index) => index >= 0);
+    if (foreignIndexes.length) {
+      const translated = await translateTelegramToEnglish(foreignIndexes.map((index) => cleaned[index] ?? ""));
+      foreignIndexes.forEach((index, translatedIndex) => { cleaned[index] = translated[translatedIndex] ?? cleaned[index] ?? ""; });
+    }
+    signalTexts = cleaned.filter((text) => isEnglishText(text).ok);
+    for (let index = 0; index < posts.length; index++) {
+      const text = cleaned[index];
+      const post = posts[index];
+      if (!text || !post || !isEnglishText(text).ok) continue;
+      collected.push({
+        provider: `Telegram/${post.channel}`,
+        sourceName: `@${post.channel}`,
+        url: post.url,
+        title: text.slice(0, 180),
+        description: text,
+        imageUrl: null,
+        publishedAt: post.publishedAt,
+      });
+    }
     stats.signals = signalTexts.length;
   } catch (err) {
     stats.errors.push(`telegram signals: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const hasSignal = (text: string) => signalTexts.some((s) => sameEvent(s, text));
+  const similarityThreshold = Number(settings["event_similarity_threshold"] ?? 0.52);
+  const hasSignal = (text: string) => signalTexts.some((s) => sameEvent(s, text, similarityThreshold));
 
   // NewsData has a hard daily credit cap, so topics are OR-batched into a few
   // wide queries instead of one request per topic.
@@ -250,12 +272,16 @@ export async function runIngest(): Promise<IngestStats> {
 
   // GATE 3 — semantic classification (keyword fallback when the AI is unavailable)
   let categories: Array<Category | null> = [];
+  let rewritten: Array<{ headline: string; summary: string }> = [];
   let aiDown = false;
   if (fresh.length) {
     const batch = fresh.slice(0, 60);
     try {
       categories = await classifyBatch(
         batch.map((s) => ({ title: s.article.title, description: s.article.description })),
+      );
+      rewritten = await rewriteBatch(
+        batch.map((s) => ({ title: s.article.title, description: s.article.description, sourceName: s.article.sourceName })),
       );
     } catch (err) {
       stats.errors.push(`classification: ${err instanceof Error ? err.message : String(err)}`);
@@ -294,7 +320,7 @@ export async function runIngest(): Promise<IngestStats> {
     }
 
     const trust = sourceTrust(article.sourceName, article.url);
-    const collision = window.find((w) => sameEvent(w.title, article.title));
+    const collision = window.find((w) => sameEvent(w.title, article.title, similarityThreshold));
     if (collision) {
       if (trust < collision.trust) {
         // higher-trust source wins: replace the queued item
@@ -308,14 +334,14 @@ export async function runIngest(): Promise<IngestStats> {
 
     let headline = article.title;
     let summary = article.description ?? "";
-    if (!aiDown) {
-      try {
-        const out = await rewrite(article);
-        headline = out.headline;
-        summary = out.summary;
-      } catch (err) {
-        stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    if (!aiDown && rewritten[i]) {
+      headline = rewritten[i]!.headline;
+      summary = rewritten[i]!.summary;
+    }
+    if (hasIncompleteSummary(summary)) {
+      stats.junk += 1;
+      rejects.push(rejectRow(article, key, "incomplete or truncated summary", category));
+      continue;
     }
 
     const { data: inserted } = await supabaseAdmin
@@ -337,7 +363,7 @@ export async function runIngest(): Promise<IngestStats> {
 
     const articleText = `${article.title} ${article.description ?? ""}`;
     const signalled = hasSignal(articleText);
-    const breaking =
+    const breaking = article.provider.startsWith("Telegram/") ||
       isBreaking(category, article.title, settings["breaking_categories"] ?? []) || signalled;
     const leaderStatement = isLeaderStatement(`${article.title} ${article.description ?? ""}`);
     const parts = await scoreParts(
@@ -611,7 +637,7 @@ export async function runPublish(
     const members = [candidate];
     for (const other of (pool ?? []) as any[]) {
       if (claimed.has(other.id) || members.length >= 4) continue;
-      if (sameEvent(`${candidate.headline} ${candidate.summary}`, `${other.headline} ${other.summary}`)) {
+      if (sameEvent(`${candidate.headline} ${candidate.summary}`, `${other.headline} ${other.summary}`, Number(settings["event_similarity_threshold"] ?? 0.52))) {
         claimed.add(other.id);
         members.push(other);
       }
@@ -637,13 +663,15 @@ export async function runPublish(
   const { data: chats } = await supabaseAdmin.from("chats").select("*").eq("active", true);
   result.chats = (chats ?? []).length;
 
-  const twoDaysAgo = new Date(Date.now() - 48 * 3_600_000).toISOString();
+  const cooldownHours = Number(settings["event_cooldown_hours"] ?? 72);
+  const similarityThreshold = Number(settings["event_similarity_threshold"] ?? 0.52);
+  const cooldownStart = new Date(Date.now() - cooldownHours * 3_600_000).toISOString();
 
   // Context dedup: headlines already sent recently, to avoid re-posting the same event.
   const { data: recentPublished } = await supabaseAdmin
     .from("published_history")
     .select("headline, dedup_key, chat_id")
-    .gte("published_at", twoDaysAgo)
+    .gte("published_at", cooldownStart)
     .order("published_at", { ascending: false })
     .limit(200);
   const publishedTitles: string[] = (recentPublished ?? [])
@@ -680,7 +708,7 @@ export async function runPublish(
     // Same event already covered? mark and skip without sending.
     const repeated =
       publishedKeys.has(item.dedup_key) ||
-      publishedTitles.some((t) => sameEvent(t, `${item.headline} ${item.summary}`));
+      publishedTitles.some((t) => sameEvent(t, item.headline, similarityThreshold));
     if (repeated) {
       await supabaseAdmin.from("queue").update({ status: "duplicate" }).eq("id", item.id);
       continue;
