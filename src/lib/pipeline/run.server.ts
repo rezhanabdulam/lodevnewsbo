@@ -288,7 +288,6 @@ export async function runIngest(): Promise<IngestStats> {
   // GATE 3 — semantic classification (keyword fallback when the AI is unavailable)
   let categories: Array<Category | null> = [];
   let rewritten: Array<{ headline: string; summary: string }> = [];
-  let rewriteDown = false;
   if (fresh.length) {
     for (let offset = 0; offset < fresh.length; offset += 40) {
       const batch = fresh.slice(offset, offset + 40);
@@ -307,7 +306,6 @@ export async function runIngest(): Promise<IngestStats> {
           batch.map((s) => ({ title: s.article.title, description: s.article.description, sourceName: s.article.sourceName })),
         ));
       } catch (err) {
-        rewriteDown = true;
         stats.errors.push(`rewrite: ${err instanceof Error ? err.message : String(err)}`);
         rewritten.push(...batch.map((s) => ({
           headline: s.article.title,
@@ -359,7 +357,7 @@ export async function runIngest(): Promise<IngestStats> {
 
     let headline = article.title;
     let summary = article.description ?? "";
-    if (!rewriteDown && rewritten[i]) {
+    if (rewritten[i]) {
       headline = rewritten[i]!.headline;
       summary = rewritten[i]!.summary;
     }
