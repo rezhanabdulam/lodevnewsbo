@@ -91,6 +91,7 @@ export const NEGATIVE_IRAN_PATTERNS: RegExp[] = [
   /\b(uprising|revolt|protests?)\b[^.]{0,40}\b(topple|overthrow|end of the (regime|islamic republic))\b/i,
   /\bpost[- ]?(khamenei|islamic republic) (iran|era)\b/i,
   /\b(report claims?|a report claims?|sources? claim|rumou?rs? (say|claim|suggest))\b[^.]{0,60}\b(die|death|dead|dying|assassinat\w+|flee|fled)\b/i,
+  /\biran(?:ian|'s)?\b[^.]{0,80}\b(propaganda|brainwash\w*|deception|disinformation machine|war spectacle)\b/i,
 ];
 
 
@@ -173,6 +174,11 @@ export function relevanceGate(article: FetchedArticle): GateResult {
   // A lone generic Middle-East mention is not enough on its own.
   if (hits === 1 && BEAT_PATTERNS[6]!.test(text) && !/iran|iraq|us |u\.s\./i.test(text)) {
     return { ok: false, reason: "only tangential regional mention" };
+  }
+  const genericWarMention = /\biran war\b/i.test(text);
+  const concreteEvent = /\b(attack|strike|missile|drone|killed|wounded|ceasefire|agreement|talks|negotiat|sanction|export|oil|hormuz|nuclear|military|government|minister|president|leader|commander|parliament|statement|announc|warn|percent|%)\b/i.test(text);
+  if (genericWarMention && !concreteEvent) {
+    return { ok: false, reason: "Iran war is only a passing mention" };
   }
   return { ok: true };
 }
