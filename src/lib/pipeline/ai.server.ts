@@ -163,7 +163,9 @@ Rules:
   const headline = (parsed.headline ?? item.title).trim();
   let summary = (parsed.summary ?? item.description ?? "").trim();
   if (/(\.\.\.|…)$/.test(summary)) {
-    summary = summary.replace(/(\.\.\.|…)$/, "").replace(/[^.!?]*$/, "").trim();
+    const withoutEllipsis = summary.replace(/(\.\.\.|…)$/, "").trim();
+    const lastCompleteSentence = withoutEllipsis.match(/^([\s\S]*[.!?])\s+[^.!?]*$/)?.[1];
+    summary = (lastCompleteSentence ?? withoutEllipsis).trim();
   }
   if (!/[.!?]$/.test(summary) && summary.length > 0) summary += ".";
   return { headline, summary };
@@ -224,8 +226,9 @@ const SORANI_ALLOWED =
 
 export function validateSorani(text: string): boolean {
   if (!text.trim()) return false;
-  if (/[A-Za-z]{3,}/.test(text)) return false;
-  return SORANI_ALLOWED.test(text);
+  const withoutAcronyms = text.replace(/\b[A-Z][A-Z0-9.-]{1,7}\b/g, "");
+  if (/[A-Za-z]{3,}/.test(withoutAcronyms)) return false;
+  return SORANI_ALLOWED.test(withoutAcronyms);
 }
 
 export interface TranslationResult {

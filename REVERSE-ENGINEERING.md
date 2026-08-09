@@ -45,7 +45,8 @@ client and bypasses RLS.
 DB functions: `is_admin(uuid)` (security definer, used by RLS),
 `claim_first_admin()` (auth trigger), `touch_updated_at()`.
 
-Queue `status` values: `queued`, `sent`, `duplicate`, `expired`, `rejected-language`.
+Queue `status` values: `queued`, `publishing`, `published`, `duplicate`, `expired`,
+`rejected-language`, and `rejected-policy`.
 
 ---
 
