@@ -23,6 +23,10 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           return new Response("Unauthorized", { status: 401 });
         }
 
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const { data: settings } = await supabaseAdmin.from("settings").select("bot_paused").eq("id", 1).single();
+        if (settings?.bot_paused) return Response.json({ ok: true, paused: true });
+
         const update = (await request.json()) as any;
         const message =
           update.message ??
@@ -35,7 +39,6 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
         const status = update.my_chat_member?.new_chat_member?.status;
         const removed = status === "left" || status === "kicked";
 
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
         await supabaseAdmin.from("chats").upsert(
           {
             chat_id: chat.id,

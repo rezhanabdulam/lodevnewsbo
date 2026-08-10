@@ -38,6 +38,10 @@ async function getSettings(): Promise<Settings> {
   return data as Settings;
 }
 
+function isPaused(settings: Settings): boolean {
+  return Boolean(settings["bot_paused"]);
+}
+
 /* ------------------------------- INGEST ---------------------------------- */
 
 export interface IngestStats {
@@ -55,6 +59,20 @@ export interface IngestStats {
 
 export async function runIngest(): Promise<IngestStats> {
   const settings = await getSettings();
+  if (isPaused(settings)) {
+    return {
+      fetched: 0,
+      junk: 0,
+      disrespect: 0,
+      offTopic: 0,
+      stale: 0,
+      duplicate: 0,
+      queued: 0,
+      breaking: 0,
+      signals: 0,
+      errors: ["bot paused"],
+    };
+  }
   const stats = {
     fetched: 0,
     junk: 0,
@@ -263,7 +281,8 @@ export async function runIngest(): Promise<IngestStats> {
       rejects.push(rejectRow(article, key, english.reason!));
       continue;
     }
-    const fresh = freshnessGate(article, 10);
+    const textForFreshness = `${article.title} ${article.description ?? ""}`;
+    const fresh = freshnessGate(article, /\b(attack|strike|missile|drone|war|explosion|airstrike|houthi|hezbollah|irgc|centcom|hormuz|nuclear)\b/i.test(textForFreshness) ? 6 : /\b(analysis|explainer|commentary|opinion)\b/i.test(textForFreshness) ? 24 : 10);
     if (!fresh.ok) {
       stats.stale += 1;
       rejects.push(rejectRow(article, key, fresh.reason!));
@@ -364,6 +383,22 @@ export async function runIngest(): Promise<IngestStats> {
     if (hasIncompleteSummary(summary)) {
       stats.junk += 1;
       rejects.push(rejectRow(article, key, "incomplete or truncated summary", category));
+      continue;
+    }
+
+    const recentEventWindow = new Date(Date.now() - Number(settings["event_cooldown_hours"] ?? 72) * 3_600_000).toISOString();
+    const { data: recentEventRows } = await supabaseAdmin
+      .from("published_history")
+      .select("headline, source_name")
+      .gte("published_at", recentEventWindow)
+      .order("published_at", { ascending: false })
+      .limit(200);
+    const sameEventAlreadyPublished = (recentEventRows ?? []).some((row: any) =>
+      sameEvent(`${row.headline ?? ""} ${row.source_name ?? ""}`, `${headline} ${summary}`, Number(settings["event_similarity_threshold"] ?? 0.52)),
+    );
+    if (sameEventAlreadyPublished) {
+      stats.duplicate += 1;
+      rejects.push(rejectRow(article, key, "duplicate event cooldown", category));
       continue;
     }
 
@@ -523,7 +558,7 @@ async function scoreParts(
     : 99;
   const rotationBonus = starvedHours >= 2 ? 15 : 0;
 
-  const breakingBonus = breaking ? 1000 : 0;
+  const breakingBonus = breaking ? 42 : 0;
   // Top-leader speeches/statements from either side are always worth posting.
   const leaderBonus = leaderStatement ? 120 : 0;
 
@@ -597,6 +632,9 @@ export async function runPublish(
   opts: { breakingOnly?: boolean; force?: number } = {},
 ): Promise<PublishResult> {
   const settings = await getSettings();
+  if (isPaused(settings)) {
+    return { sent: 0, chats: 0, skipped: "bot paused", items: [] };
+  }
   const night = isNight(settings);
   const result = { sent: 0, chats: 0, skipped: "" as string, items: [] as string[] };
 

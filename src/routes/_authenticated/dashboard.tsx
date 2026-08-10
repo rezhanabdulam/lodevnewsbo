@@ -9,7 +9,11 @@ import {
   refreshBotInfo,
   runPipelineNow,
   saveSettings,
+  setPauseState,
   setWebhook,
+  listTranslationKeys,
+  testTranslationKey,
+  upsertTranslationKey,
   updateChat,
   upsertSource,
   upsertTopic,
@@ -65,7 +69,16 @@ function Dashboard() {
     refetchInterval: 30_000,
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["dashboard"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["dashboard"] });
+    qc.invalidateQueries({ queryKey: ["translation-keys"] });
+  };
+
+  const { data: translationData } = useQuery({
+    queryKey: ["translation-keys"],
+    queryFn: () => listTranslationKeysFn(),
+    refetchInterval: 30_000,
+  });
   const onError = (e: unknown) =>
     toast.error(e instanceof Error ? e.message : "Something went wrong");
 
@@ -76,6 +89,10 @@ function Dashboard() {
   const runFn = useServerFn(runPipelineNow);
   const botInfoFn = useServerFn(refreshBotInfo);
   const webhookFn = useServerFn(setWebhook);
+  const pauseFn = useServerFn(setPauseState);
+  const listTranslationKeysFn = useServerFn(listTranslationKeys);
+  const upsertTranslationKeyFn = useServerFn(upsertTranslationKey);
+  const testTranslationKeyFn = useServerFn(testTranslationKey);
 
   const mSettings = useMutation({
     mutationFn: (patch: Record<string, unknown>) => saveSettingsFn({ data: patch as never }),
@@ -109,6 +126,26 @@ function Dashboard() {
     onSuccess: () => toast.success("Telegram webhook registered — chats will now auto-register"),
     onError,
   });
+  const mPause = useMutation({
+    mutationFn: (paused: boolean) =>
+      pauseFn({ data: { paused, reason: paused ? "Stopped from dashboard" : null } }),
+    onSuccess: (_r, paused) => {
+      toast.success(paused ? "All services paused" : "All services resumed");
+      invalidate();
+    },
+    onError,
+  });
+
+  const mTranslationKey = useMutation({
+    mutationFn: (payload: any) => upsertTranslationKeyFn({ data: payload }),
+    onSuccess: () => { toast.success("Translation key saved"); invalidate(); },
+    onError,
+  });
+  const mTranslationTest = useMutation({
+    mutationFn: (id: string) => testTranslationKeyFn({ data: { id } }),
+    onSuccess: (r) => toast.success(`Translation test passed: ${r.preview}`),
+    onError,
+  });
 
   async function signOut() {
     await qc.cancelQueries();
@@ -132,6 +169,7 @@ function Dashboard() {
   }
 
   const s = data.settings as Record<string, any>;
+  const paused = Boolean(s.bot_paused);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -141,22 +179,37 @@ function Dashboard() {
           <h1 className="text-2xl font-semibold">Bot operations console</h1>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="secondary" onClick={() => mRun.mutate("ingest")} disabled={mRun.isPending}>
+          <Button size="sm" variant="secondary" onClick={() => mRun.mutate("ingest")} disabled={mRun.isPending || paused}>
             {mRun.isPending ? "Running…" : "Fetch now"}
           </Button>
-          <Button size="sm" onClick={() => mRun.mutate("publishTop3")} disabled={mRun.isPending}>
+          <Button size="sm" onClick={() => mRun.mutate("publishTop3")} disabled={mRun.isPending || paused}>
             Publish top 3
+          </Button>
+          <Button
+            size="sm"
+            variant={paused ? "secondary" : "destructive"}
+            onClick={() => mPause.mutate(!paused)}
+            disabled={mPause.isPending}
+          >
+            {paused ? "Resume services" : "Stop all"}
           </Button>
           <Button size="sm" variant="ghost" onClick={signOut}>Sign out</Button>
         </div>
       </header>
 
+      {paused ? (
+        <div className="mt-6 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          Services are paused. Ingest, publish, and Telegram webhook actions are blocked until you resume them.
+          {s.bot_paused_reason ? <span className="ml-2 text-destructive/80">Reason: {String(s.bot_paused_reason)}</span> : null}
+        </div>
+      ) : null}
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           { label: "Queued", value: data.queue.length },
           { label: "Published 24h", value: data.history.length },
           { label: "Active chats", value: data.chats.filter((c: any) => c.active).length },
           { label: "Translation fails", value: data.translationFailures.length },
+          { label: "Status", value: paused ? "Paused" : "Live" },
         ].map((stat) => (
           <div key={stat.label} className="panel p-4">
             <p className="text-2xl font-semibold">{stat.value}</p>
@@ -172,7 +225,7 @@ function Dashboard() {
           <TabsTrigger value="cadence">Cadence</TabsTrigger>
           <TabsTrigger value="breaking">Breaking</TabsTrigger>
           <TabsTrigger value="sources">Sources &amp; topics</TabsTrigger>
-          <TabsTrigger value="translation">Translation log</TabsTrigger>
+          <TabsTrigger value="translation">Translation</TabsTrigger>
         </TabsList>
 
         {/* QUEUE */}
@@ -447,7 +500,45 @@ function Dashboard() {
 
         {/* TRANSLATION */}
         <TabsContent value="translation" className="mt-4">
-          <Panel title="Translation failures" hint="Every model failed script validation; English was sent instead.">
+          <Panel
+            title="Translation provider manager"
+            hint="Gemini and MiniMax keys are stored server-side. Keys are never returned to the browser; only masked metadata is shown."
+          >
+            <div className="rounded-md border border-border p-3 text-sm">
+              <p className="font-medium">Mode</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {[
+                  ["gemini_first", "Google Gemini only"],
+                  ["minimax_first", "MiniMax only"],
+                  ["both", "Gemini → MiniMax fallback"],
+                ].map(([value, label]) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    variant={String(s.translation_mode ?? "gemini_first") === value ? "default" : "secondary"}
+                    onClick={() => mSettings.mutate({ translation_mode: value })}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                In Gemini-only mode, MiniMax is never called. In MiniMax-only mode, Google is never called.
+                “Both” is conservative fallback mode: a failed/limited Gemini key moves to the next healthy key,
+                then MiniMax only if Gemini has no usable key.
+              </p>
+            </div>
+
+            <TranslationKeyManager
+              keys={translationData?.keys ?? []}
+              envDefaults={translationData?.envDefaults}
+              onSave={(payload) => mTranslationKey.mutate(payload)}
+              onTest={(id) => mTranslationTest.mutate(id)}
+              busy={mTranslationKey.isPending || mTranslationTest.isPending}
+            />
+          </Panel>
+
+          <Panel title="Translation failures" hint="Every configured provider/key failed or returned invalid Sorani.">
             {data.translationFailures.length === 0 ? (
               <p className="text-sm text-muted-foreground">No failures logged.</p>
             ) : (
@@ -465,6 +556,103 @@ function Dashboard() {
           </Panel>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+
+function TranslationKeyManager({
+  keys,
+  envDefaults,
+  onSave,
+  onTest,
+  busy,
+}: {
+  keys: any[];
+  envDefaults?: { gemini: number; minimax: boolean };
+  onSave: (v: any) => void;
+  onTest: (id: string) => void;
+  busy: boolean;
+}) {
+  const [provider, setProvider] = useState<"gemini" | "minimax">("gemini");
+  const [label, setLabel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("gemini-2.5-flash");
+  const [priority, setPriority] = useState(10);
+
+  function add() {
+    if (!label.trim() || !apiKey.trim()) return;
+    onSave({ provider, label: label.trim(), api_key: apiKey.trim(), model, priority });
+    setLabel(""); setApiKey("");
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-border p-3">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <select className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={provider}
+            onChange={(e) => {
+              const v = e.target.value as "gemini" | "minimax";
+              setProvider(v);
+              setModel(v === "gemini" ? "gemini-2.5-flash" : "minimax/minimax-m3");
+            }}>
+            <option value="gemini">Google Gemini</option>
+            <option value="minimax">MiniMax / Vercel</option>
+          </select>
+          <Input placeholder="Key label" value={label} onChange={(e) => setLabel(e.target.value)} />
+          <Input placeholder="API key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+          <Input placeholder="Model" value={model} onChange={(e) => setModel(e.target.value)} />
+          <Button size="sm" onClick={add} disabled={busy || !label.trim() || !apiKey.trim()}>Add key</Button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Environment defaults detected: {envDefaults?.gemini ?? 0} Gemini key(s), {envDefaults?.minimax ? "MiniMax configured" : "no MiniMax gateway key"}.
+          For GitHub/Vercel deployment, put secrets in Vercel Environment Variables rather than committing them.
+        </p>
+      </div>
+
+      {keys.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No database-managed translation keys. Environment keys will still work.</p>
+      ) : (
+        keys.map((key: any) => (
+          <div key={key.id} className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3">
+            <div className="min-w-52 flex-1">
+              <p className="font-medium">{key.label} <Badge variant="secondary">{key.provider}</Badge></p>
+              <p className="text-xs text-muted-foreground">
+                {key.model} · priority {key.priority} · {key.enabled ? "enabled" : "disabled"} · last status {key.last_status ?? "—"}
+              </p>
+              {key.cooldown_until ? <p className="text-xs text-destructive">Cooldown until {new Date(key.cooldown_until).toLocaleTimeString()}</p> : null}
+              {key.last_error ? <p className="text-xs text-muted-foreground">{String(key.last_error).slice(0, 140)}</p> : null}
+            </div>
+            <Switch checked={key.enabled} onCheckedChange={(v) => onSave({ id: key.id, provider: key.provider, label: key.label, model: key.model, enabled: v, priority: key.priority })} />
+            <Button size="sm" variant="secondary" onClick={() => onTest(key.id)} disabled={busy}>Test</Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => {
+                const nextLabel = window.prompt("Key label", key.label);
+                if (nextLabel === null || !nextLabel.trim()) return;
+                const nextModel = window.prompt("Model", key.model);
+                if (nextModel === null || !nextModel.trim()) return;
+                const nextPriority = window.prompt("Priority", String(key.priority));
+                if (nextPriority === null) return;
+                const nextKey = window.prompt("New API key (Cancel = keep current key)", "");
+                onSave({
+                  id: key.id,
+                  provider: key.provider,
+                  label: nextLabel.trim(),
+                  model: nextModel.trim(),
+                  priority: Number(nextPriority) || key.priority,
+                  ...(nextKey?.trim() ? { api_key: nextKey.trim() } : {}),
+                });
+              }}
+            >
+              Edit
+            </Button>
+            <Button size="sm" variant="destructive" onClick={() => onSave({ id: key.id, provider: key.provider, label: key.label, model: key.model, priority: key.priority, remove: true })} disabled={busy}>Remove</Button>
+          </div>
+        ))
+      )}
     </div>
   );
 }

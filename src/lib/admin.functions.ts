@@ -2,9 +2,27 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 
+function allowedOwnerEmails(): Set<string> {
+  const raw = process.env["OWNER_EMAILS"] ?? process.env["OWNER_EMAIL"] ?? "";
+  return new Set(
+    raw
+      .split(/[\s,;]+/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function isOwner(context: any): boolean {
+  const email = String(context?.claims?.email ?? context?.claims?.preferred_username ?? "")
+    .trim()
+    .toLowerCase();
+  if (!email) return false;
+  return allowedOwnerEmails().has(email);
+}
+
 async function assertAdmin(context: any) {
-  const { data, error } = await context.supabase
-    .rpc("is_admin", { _user_id: context.userId });
+  if (isOwner(context)) return;
+  const { data, error } = await context.supabase.rpc("is_admin", { _user_id: context.userId });
   if (error || !data) throw new Error("Forbidden: not an admin");
 }
 
@@ -31,6 +49,7 @@ export const getDashboard = createServerFn({ method: "GET" })
 
     return {
       settings: settings.data,
+      isOwner: isOwner(context),
       chats: chats.data ?? [],
       sources: sources.data ?? [],
       topics: topics.data ?? [],
@@ -59,6 +78,10 @@ const settingsSchema = z.object({
   timezone: z.string().min(2).max(64).optional(),
   event_cooldown_hours: z.number().int().min(1).max(336).optional(),
   event_similarity_threshold: z.number().min(0.3).max(0.9).optional(),
+  bot_paused: z.boolean().optional(),
+  bot_paused_reason: z.string().max(240).nullable().optional(),
+  translation_mode: z.enum(["gemini_first","minimax_first","both"]).optional(),
+  translation_model: z.string().min(2).max(120).optional(),
 });
 
 export const saveSettings = createServerFn({ method: "POST" })
@@ -183,6 +206,89 @@ export const upsertSource = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+
+const translationKeySchema = z.object({
+  id: z.string().uuid().optional(),
+  provider: z.enum(["gemini", "minimax"]),
+  label: z.string().min(1).max(80),
+  api_key: z.string().min(10).max(500).optional(),
+  model: z.string().min(2).max(120),
+  enabled: z.boolean().optional(),
+  priority: z.number().int().min(1).max(999).optional(),
+  remove: z.boolean().optional(),
+});
+
+export const listTranslationKeys = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertAdmin(context);
+    const { data, error } = await (context.supabase as any)
+      .from("translation_provider_keys")
+      .select("id,provider,label,model,enabled,priority,cooldown_until,consecutive_failures,last_status,last_error,last_used_at,created_at")
+      .order("provider")
+      .order("priority");
+    if (error) throw new Error(error.message);
+    return {
+      keys: data ?? [],
+      envDefaults: {
+        gemini: [1, 2, 3].filter((i) => Boolean(process.env[`GEMINI_API_KEY_${i}`])).length,
+        minimax: Boolean(process.env["VERCEL_AI_GATEWAY_API_KEY"] ?? process.env["AI_GATEWAY_API_KEY"]),
+      },
+    };
+  });
+
+export const upsertTranslationKey = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => translationKeySchema.parse(input))
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context);
+    const sb = context.supabase as any;
+    if (data.remove && data.id) {
+      const { error } = await sb.from("translation_provider_keys").delete().eq("id", data.id);
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+    const row: Record<string, unknown> = {
+      provider: data.provider,
+      label: data.label,
+      model: data.model,
+      enabled: data.enabled ?? true,
+      priority: data.priority ?? 100,
+    };
+    if (data.api_key?.trim()) row.api_key = data.api_key.trim();
+
+    if (data.id) {
+      // An edit without a new key keeps the existing secret.
+      const { error } = await sb.from("translation_provider_keys").update(row).eq("id", data.id);
+      if (error) throw new Error(error.message);
+    } else {
+      if (!data.api_key?.trim()) throw new Error("API key is required when adding a provider key");
+      const { error } = await sb.from("translation_provider_keys").insert({ ...row, api_key: data.api_key.trim() });
+      if (error) throw new Error(error.message);
+    }
+    return { ok: true };
+  });
+
+export const testTranslationKey = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context);
+    const { data: row, error } = await (context.supabase as any)
+      .from("translation_provider_keys")
+      .select("*")
+      .eq("id", data.id)
+      .single();
+    if (error || !row) throw new Error(error?.message ?? "Key not found");
+
+    const { validateSorani } = await import("@/lib/pipeline/ai.server");
+    // A tiny fixed test sentence avoids spending a full article's worth of tokens.
+    const { translateToSoraniWithKey } = await import("@/lib/pipeline/ai.server");
+    const result = await translateToSoraniWithKey(row, "Iran announced a new statement today.");
+    if (!result.text || !validateSorani(result.text)) throw new Error(result.detail ?? "Translation test failed");
+    return { ok: true, preview: result.text };
+  });
+
 export const runPipelineNow = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
@@ -224,4 +330,28 @@ export const setWebhook = createServerFn({ method: "POST" })
       allowed_updates: ["message", "edited_message", "channel_post", "my_chat_member"],
     });
     return { ok: true };
+  });
+
+
+export const setPauseState = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: unknown) =>
+    z
+      .object({
+        paused: z.boolean(),
+        reason: z.string().max(240).nullable().optional(),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context);
+    const patch: Record<string, unknown> = {
+      bot_paused: data.paused,
+      bot_paused_reason: data.paused ? (data.reason ?? "Paused by admin") : null,
+      bot_paused_at: data.paused ? new Date().toISOString() : null,
+    };
+    if (data.paused) patch["next_publish_at"] = null;
+    const { error } = await context.supabase.from("settings").update(patch as never).eq("id", 1);
+    if (error) throw new Error(error.message);
+    return { ok: true, paused: data.paused };
   });

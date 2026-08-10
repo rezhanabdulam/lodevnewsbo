@@ -1,10 +1,13 @@
 import { CATEGORIES, type Category } from "./types";
 
-const GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const GATEWAY = "https://ai-gateway.vercel.sh/v1/chat/completions";
 
 function apiKey(): string {
-  const key = process.env["LOVABLE_API_KEY"];
-  if (!key) throw new Error("Missing LOVABLE_API_KEY");
+  const key =
+    process.env["VERCEL_AI_GATEWAY_API_KEY"] ??
+    process.env["AI_GATEWAY_API_KEY"] ??
+    process.env["VERCEL_API_KEY"];
+  if (!key) throw new Error("Missing VERCEL_AI_GATEWAY_API_KEY");
   return key;
 }
 
@@ -12,14 +15,18 @@ async function chat(
   model: string,
   messages: Array<{ role: string; content: string }>,
 ): Promise<string> {
-  const body: Record<string, unknown> = { model, messages };
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: 0,
+    max_tokens: 220,
+  };
   if (model.startsWith("openai/gpt-5.6")) body["reasoning_effort"] = "none";
 
   const res = await fetch(GATEWAY, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "Lovable-API-Key": apiKey(),
       Authorization: `Bearer ${apiKey()}`,
     },
     body: JSON.stringify(body),
@@ -216,19 +223,165 @@ export function isBreaking(
   return false;
 }
 
-const TRANSLATION_MODELS = [
-  "google/gemini-3.6-flash",
-];
+type TranslationProvider = "gemini" | "minimax";
 
-/** Allowed for Kurdish Sorani: Arabic-script ranges + punctuation, digits, emoji, whitespace. */
+interface TranslationKey {
+  id: string;
+  provider: TranslationProvider;
+  label: string;
+  api_key: string;
+  model: string;
+  enabled: boolean;
+  priority: number;
+  cooldown_until: string | null;
+  consecutive_failures: number;
+  last_status: number | null;
+  last_error: string | null;
+  last_used_at: string | null;
+}
+
+const translationGateway = "https://ai-gateway.vercel.sh/v1/chat/completions";
+const googleGenerate = "https://generativelanguage.googleapis.com/v1beta/models";
+
+async function loadTranslationKeys(): Promise<TranslationKey[]> {
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await (supabaseAdmin as any)
+      .from("translation_provider_keys")
+      .select("*")
+      .eq("enabled", true)
+      .order("priority", { ascending: true });
+    if (!error && data?.length) return data as TranslationKey[];
+  } catch {
+    // Fall back to environment variables during first boot/migration.
+  }
+
+  const keys: TranslationKey[] = [];
+  const add = (provider: TranslationProvider, key: string | undefined, index: number, model: string) => {
+    if (!key?.trim()) return;
+    keys.push({
+      id: `${provider}-env-${index}`,
+      provider,
+      label: `${provider === "gemini" ? "Google AI Studio" : "Vercel AI Gateway"} ${index}`,
+      api_key: key.trim(),
+      model,
+      enabled: true,
+      priority: index,
+      cooldown_until: null,
+      consecutive_failures: 0,
+      last_status: null,
+      last_error: null,
+      last_used_at: null,
+    });
+  };
+
+  add("gemini", process.env["GEMINI_API_KEY_1"], 1, process.env["GEMINI_TRANSLATION_MODEL"] ?? "gemini-2.5-flash");
+  add("gemini", process.env["GEMINI_API_KEY_2"], 2, process.env["GEMINI_TRANSLATION_MODEL"] ?? "gemini-2.5-flash");
+  add("gemini", process.env["GEMINI_API_KEY_3"], 3, process.env["GEMINI_TRANSLATION_MODEL"] ?? "gemini-2.5-flash");
+  add("minimax", process.env["VERCEL_AI_GATEWAY_API_KEY"] ?? process.env["AI_GATEWAY_API_KEY"], 1, "minimax/minimax-m3");
+  return keys;
+}
+
+function isAvailable(key: TranslationKey): boolean {
+  return !key.cooldown_until || Date.parse(key.cooldown_until) <= Date.now();
+}
+
+async function markTranslationKey(key: TranslationKey, status: number | null, errorText?: string) {
+  // Env-backed keys cannot be mutated; DB-managed keys are tracked for safe rotation.
+  if (key.id.includes("-env-")) return;
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const patch: Record<string, unknown> = {
+      last_status: status,
+      last_error: errorText?.slice(0, 500) ?? null,
+      last_used_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    if (status === 429 || status === 403) {
+      const cooldownMinutes = status === 429 ? 10 : 60;
+      patch.cooldown_until = new Date(Date.now() + cooldownMinutes * 60_000).toISOString();
+    } else if (status !== null && status >= 200 && status < 300) {
+      patch.cooldown_until = null;
+      patch.consecutive_failures = 0;
+    }
+    if (status !== null && status >= 400) {
+      patch.consecutive_failures = Math.min(10, (key.consecutive_failures ?? 0) + 1);
+    }
+    await (supabaseAdmin as any).from("translation_provider_keys").update(patch).eq("id", key.id);
+  } catch {
+    // Translation must not fail because telemetry failed.
+  }
+}
+
+async function geminiTranslate(key: TranslationKey, text: string): Promise<string> {
+  const url = `${googleGenerate}/${encodeURIComponent(key.model)}:generateContent?key=${encodeURIComponent(key.api_key)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: "Translate into Kurdish Sorani using Arabic script. Preserve names, numbers, URLs, acronyms and attribution. Output only the translation, with no preface, explanation or markdown." }],
+      },
+      contents: [{ role: "user", parts: [{ text: text.slice(0, 900) }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 260 },
+    }),
+  });
+  const body = await res.text();
+  if (!res.ok) {
+    await markTranslationKey(key, res.status, body);
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 260)}`);
+  }
+  await markTranslationKey(key, res.status);
+  const json = JSON.parse(body) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  return json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim() ?? "";
+}
+
+async function minimaxTranslate(key: TranslationKey, text: string): Promise<string> {
+  const res = await fetch(translationGateway, {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${key.api_key}` },
+    body: JSON.stringify({
+      model: key.model || "minimax/minimax-m3",
+      messages: [
+        { role: "system", content: "Translate into Kurdish Sorani using Arabic script. Preserve names, numbers, URLs, acronyms and attribution. Output only the translation, with no preface, explanation or markdown." },
+        { role: "user", content: text.slice(0, 900) },
+      ],
+      temperature: 0,
+      max_tokens: 260,
+    }),
+  });
+  const body = await res.text();
+  if (!res.ok) {
+    await markTranslationKey(key, res.status, body);
+    throw new Error(`MiniMax gateway ${res.status}: ${body.slice(0, 260)}`);
+  }
+  await markTranslationKey(key, res.status);
+  const json = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
 const SORANI_ALLOWED =
-  /^[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF0-9\s\p{P}\p{S}\p{Extended_Pictographic}]*$/u;
+  /^[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF0-9\s\p{P}\p{S}\p{Extended_Pictographic}A-Za-z.-]*$/u;
 
 export function validateSorani(text: string): boolean {
   if (!text.trim()) return false;
-  const withoutAcronyms = text.replace(/\b[A-Z][A-Z0-9.-]{1,7}\b/g, "");
-  if (/[A-Za-z]{3,}/.test(withoutAcronyms)) return false;
-  return SORANI_ALLOWED.test(withoutAcronyms);
+  // Allow legitimate short Latin tokens such as USA, NATO, F-35 and names/URLs,
+  // while rejecting prose that is overwhelmingly Latin-script.
+  const latinLetters = (text.match(/[A-Za-z]/g) ?? []).length;
+  const arabicLetters = (text.match(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/g) ?? []).length;
+  if (arabicLetters < 2) return false;
+  if (latinLetters > Math.max(24, arabicLetters * 0.35)) return false;
+  return SORANI_ALLOWED.test(text);
+}
+
+async function getTranslationMode(): Promise<"gemini_first" | "minimax_first" | "both"> {
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data } = await (supabaseAdmin as any).from("settings").select("translation_mode").eq("id", 1).single();
+    const mode = String(data?.translation_mode ?? "gemini_first");
+    if (mode === "minimax_first" || mode === "both") return mode;
+  } catch {}
+  return "gemini_first";
 }
 
 export interface TranslationResult {
@@ -238,26 +391,37 @@ export interface TranslationResult {
 }
 
 export async function translateToSorani(text: string): Promise<TranslationResult> {
+  const keys = (await loadTranslationKeys()).filter(isAvailable);
+  const mode = await getTranslationMode();
+
+  const gemini = keys.filter((k) => k.provider === "gemini");
+  const minimax = keys.filter((k) => k.provider === "minimax");
+  let ordered: TranslationKey[];
+  if (mode === "minimax_first") ordered = [...minimax, ...gemini];
+  else if (mode === "both") ordered = [...gemini, ...minimax];
+  else ordered = [...gemini, ...minimax];
+
+  // In "both", Gemini is tried first and MiniMax is a fallback. In either
+  // single-provider mode, the other provider is never used.
+  if (mode !== "both") {
+    ordered = mode === "minimax_first" ? minimax : gemini;
+  }
+
   const tried: string[] = [];
   let detail = "";
-  for (const model of TRANSLATION_MODELS) {
-    tried.push(model);
+  for (const key of ordered) {
+    tried.push(`${key.provider}:${key.model}`);
     try {
-      const out = (
-        await chat(model, [
-          {
-            role: "system",
-            content:
-              "Translate the user's news text into Kurdish Sorani (Central Kurdish, Arabic script). Output ONLY the translation. Do not use Latin letters. Keep numbers and emoji as-is.",
-          },
-          { role: "user", content: text },
-        ])
-      ).trim();
+      const out = key.provider === "gemini"
+        ? await geminiTranslate(key, text)
+        : await minimaxTranslate(key, text);
       if (validateSorani(out)) return { text: out, modelsTried: tried };
-      detail = `output failed script validation on ${model}`;
+      detail = `${key.provider} returned output that failed Sorani validation`;
+      await markTranslationKey(key, 200, detail);
     } catch (err) {
       detail = err instanceof Error ? err.message : String(err);
     }
   }
-  return { text: null, modelsTried: tried, detail };
+  return { text: null, modelsTried: tried, detail: detail || "No translation provider is configured or available" };
 }
+
