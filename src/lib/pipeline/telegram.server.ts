@@ -82,47 +82,121 @@ export interface OutgoingPost {
   extraSources?: PostSource[];
 }
 
-export function formatMessage(post: OutgoingPost): string {
-  const when = post.originalPublishedAt
-    ? new Intl.DateTimeFormat("en-GB", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: post.timezone,
-      }).format(new Date(post.originalPublishedAt))
-    : "";
+/** Admin-editable presentation options for every published message. */
+export interface PostFormat {
+  showCategory: boolean;
+  showSourceName: boolean;
+  showSourceLink: boolean;
+  showTimestamp: boolean;
+  showSummary: boolean;
+  showImages: boolean;
+  linkPreview: boolean;
+  showHashtags: boolean;
+  headerEmoji: string;
+  readMoreLabel: string;
+  footerText: string;
+  defaultHashtags: string[];
+  categoryHashtags: Record<string, string[]>;
+}
+
+export const DEFAULT_POST_FORMAT: PostFormat = {
+  showCategory: true,
+  showSourceName: true,
+  showSourceLink: true,
+  showTimestamp: true,
+  showSummary: true,
+  showImages: true,
+  linkPreview: false,
+  showHashtags: true,
+  headerEmoji: "📰",
+  readMoreLabel: "Read the full report",
+  footerText: "",
+  defaultHashtags: ["#Iran", "#IranUSA", "#MiddleEast"],
+  categoryHashtags: {},
+};
+
+function normalizeTag(raw: string): string {
+  const cleaned = raw.trim().replace(/^#+/, "").replace(/[^\p{L}\p{N}_]/gu, "");
+  return cleaned ? `#${cleaned}` : "";
+}
+
+export function hashtagsFor(post: OutgoingPost, format: PostFormat): string[] {
+  const list = [
+    ...(format.categoryHashtags?.[post.category] ?? []),
+    ...(format.defaultHashtags ?? []),
+  ]
+    .map(normalizeTag)
+    .filter(Boolean);
+  return Array.from(new Set(list)).slice(0, 6);
+}
+
+export function formatMessage(post: OutgoingPost, format: PostFormat = DEFAULT_POST_FORMAT): string {
+  const when =
+    format.showTimestamp && post.originalPublishedAt
+      ? new Intl.DateTimeFormat("en-GB", {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: post.timezone,
+        }).format(new Date(post.originalPublishedAt))
+      : "";
 
   const sources: PostSource[] = [
     { name: post.sourceName, url: post.url },
     ...(post.extraSources ?? []),
   ];
 
-  const lines = [
-    `📰 <b>${escapeHtml(post.category.replace(/-/g, " ").toUpperCase())}</b>`,
-    "",
-    `<b>${escapeHtml(post.headline)}</b>`,
-    "",
-    escapeHtml(post.summary),
-    "",
-    `🗞 <i>${escapeHtml(post.sourceName)}</i>${when ? ` · ${escapeHtml(when)}` : ""}`,
-  ];
-
-  if (sources.length > 1) {
+  const lines: string[] = [];
+  if (format.showCategory) {
     lines.push(
-      ...sources.map(
-        (s, i) => `${i === 0 ? "🔗" : "•"} <a href="${escapeHtml(s.url)}">${escapeHtml(s.name)}</a>`,
-      ),
+      `${format.headerEmoji ? `${escapeHtml(format.headerEmoji)} ` : ""}<b>${escapeHtml(
+        post.category.replace(/-/g, " ").toUpperCase(),
+      )}</b>`,
+      "",
     );
-  } else {
-    lines.push(`<a href="${escapeHtml(post.url)}">Read the full report</a>`);
+  }
+  lines.push(`<b>${escapeHtml(post.headline)}</b>`);
+  if (format.showSummary && post.summary.trim()) lines.push("", escapeHtml(post.summary));
+
+  const attribution =
+    format.showSourceName || when
+      ? `${format.showSourceName ? `🗞 <i>${escapeHtml(post.sourceName)}</i>` : ""}${
+          when ? `${format.showSourceName ? " · " : ""}${escapeHtml(when)}` : ""
+        }`
+      : "";
+  if (attribution) lines.push("", attribution);
+
+  if (format.showSourceLink) {
+    if (sources.length > 1) {
+      lines.push(
+        ...sources.map(
+          (s, i) =>
+            `${i === 0 ? "🔗" : "•"} <a href="${escapeHtml(s.url)}">${escapeHtml(s.name)}</a>`,
+        ),
+      );
+    } else {
+      lines.push(
+        `<a href="${escapeHtml(post.url)}">${escapeHtml(format.readMoreLabel || "Read more")}</a>`,
+      );
+    }
   }
 
-  return lines.filter((l) => l !== undefined).join("\n");
+  if (format.showHashtags) {
+    const tags = hashtagsFor(post, format);
+    if (tags.length) lines.push("", tags.join(" "));
+  }
+  if (format.footerText?.trim()) lines.push("", escapeHtml(format.footerText.trim()));
+
+  return lines.join("\n");
 }
 
 
-export async function sendPost(chatId: number, post: OutgoingPost): Promise<void> {
-  const text = formatMessage(post);
-  if (post.imageUrl) {
+export async function sendPost(
+  chatId: number,
+  post: OutgoingPost,
+  format: PostFormat = DEFAULT_POST_FORMAT,
+): Promise<void> {
+  const text = formatMessage(post, format);
+  if (format.showImages && post.imageUrl) {
     try {
       await telegramCall("sendPhoto", {
         chat_id: chatId,
@@ -139,6 +213,6 @@ export async function sendPost(chatId: number, post: OutgoingPost): Promise<void
     chat_id: chatId,
     text,
     parse_mode: "HTML",
-    link_preview_options: { is_disabled: !post.imageUrl ? false : true },
+    link_preview_options: { is_disabled: !format.linkPreview },
   });
 }
