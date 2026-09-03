@@ -225,6 +225,7 @@ function Dashboard() {
           <TabsTrigger value="cadence">Cadence</TabsTrigger>
           <TabsTrigger value="breaking">Breaking</TabsTrigger>
           <TabsTrigger value="sources">Sources &amp; topics</TabsTrigger>
+          <TabsTrigger value="format">Format</TabsTrigger>
           <TabsTrigger value="translation">Translation</TabsTrigger>
         </TabsList>
 
