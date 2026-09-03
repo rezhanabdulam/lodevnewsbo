@@ -22,7 +22,7 @@ import {
   translateTelegramToEnglish,
   translateToSorani,
 } from "./ai.server";
-import { sendPost, type OutgoingPost, type PostSource } from "./telegram.server";
+import { sendPost, DEFAULT_POST_FORMAT, type OutgoingPost, type PostFormat, type PostSource } from "./telegram.server";
 import {
   DEFAULT_TELEGRAM_CHANNELS,
   fetchTelegramSignals,
