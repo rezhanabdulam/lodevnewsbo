@@ -142,7 +142,7 @@ function parseRssItems(
         url: link,
         title,
         description,
-        imageUrl: null,
+        imageUrl: extractImage(block),
         publishedAt: effectivePublishedAt(tag(block, "pubDate"), `${title} ${description ?? ""}`),
       };
     })
