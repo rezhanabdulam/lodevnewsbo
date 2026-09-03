@@ -97,6 +97,27 @@ function unwrapAggregatorUrl(raw: string): string {
   }
 }
 
+/** Best-effort thumbnail extraction from an RSS <item> block. */
+function extractImage(block: string): string | null {
+  const patterns = [
+    /<media:content[^>]+url=["']([^"']+)["']/i,
+    /<media:thumbnail[^>]+url=["']([^"']+)["']/i,
+    /<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image/i,
+    /<enclosure[^>]+type=["']image[^"']*["'][^>]*url=["']([^"']+)["']/i,
+    /<image[^>]*>\s*<url>([\s\S]*?)<\/url>/i,
+    /<img[^>]+src=["']([^"']+)["']/i,
+    /&lt;img[^&]*src=["']([^"']+)["']/i,
+  ];
+  for (const re of patterns) {
+    const url = block.match(re)?.[1]?.trim();
+    if (url && /^https?:\/\//i.test(url) && /\.(jpe?g|png|webp)(\?|$)/i.test(url.split("#")[0]!)) {
+      return url;
+    }
+    if (url && /^https?:\/\//i.test(url) && re.source.startsWith("<media")) return url;
+  }
+  return null;
+}
+
 function parseRssItems(
   xml: string,
   provider: string,
@@ -121,7 +142,7 @@ function parseRssItems(
         url: link,
         title,
         description,
-        imageUrl: null,
+        imageUrl: extractImage(block),
         publishedAt: effectivePublishedAt(tag(block, "pubDate"), `${title} ${description ?? ""}`),
       };
     })

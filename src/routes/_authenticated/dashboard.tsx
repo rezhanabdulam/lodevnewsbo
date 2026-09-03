@@ -225,6 +225,7 @@ function Dashboard() {
           <TabsTrigger value="cadence">Cadence</TabsTrigger>
           <TabsTrigger value="breaking">Breaking</TabsTrigger>
           <TabsTrigger value="sources">Sources &amp; topics</TabsTrigger>
+          <TabsTrigger value="format">Format</TabsTrigger>
           <TabsTrigger value="translation">Translation</TabsTrigger>
         </TabsList>
 
@@ -498,6 +499,11 @@ function Dashboard() {
           </Panel>
         </TabsContent>
 
+        {/* FORMAT */}
+        <TabsContent value="format" className="mt-4">
+          <FormatTab settings={s} onSave={(patch) => mSettings.mutate(patch)} saving={mSettings.isPending} />
+        </TabsContent>
+
         {/* TRANSLATION */}
         <TabsContent value="translation" className="mt-4">
           <Panel
@@ -734,6 +740,167 @@ function AddSource({
       >
         Add provider
       </Button>
+    </div>
+  );
+}
+
+/* ------------------------------- FORMAT TAB ------------------------------- */
+
+const FORMAT_TOGGLES: Array<[string, string, string]> = [
+  ["post_show_category", "Category line", "Show the category header above the headline."],
+  ["post_show_summary", "Summary", "Show the rewritten 2–3 sentence summary."],
+  ["post_show_source_name", "Source name", "Show the outlet that reported the story."],
+  ["post_show_timestamp", "Timestamp", "Show the original publication time."],
+  ["post_show_source_link", "Source link", "Attach the article link (or all clustered links)."],
+  ["post_show_images", "Image / thumbnail", "Post the article's own photo when the source provides one."],
+  ["post_link_preview", "Telegram link preview", "Let Telegram render its own preview card for the link."],
+  ["post_show_hashtags", "Hashtags", "Append the hashtag line."],
+];
+
+function tagsToText(value: unknown): string {
+  return Array.isArray(value) ? value.join(" ") : "";
+}
+function textToTags(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((t) => t.trim().replace(/^#+/, ""))
+    .filter(Boolean)
+    .map((t) => `#${t}`)
+    .slice(0, 10);
+}
+
+function FormatTab({
+  settings,
+  onSave,
+  saving,
+}: {
+  settings: Record<string, any>;
+  onSave: (patch: Record<string, unknown>) => void;
+  saving: boolean;
+}) {
+  const bool = (key: string, fallback = true) =>
+    settings[key] === undefined || settings[key] === null ? fallback : Boolean(settings[key]);
+  const [emoji, setEmoji] = useState(String(settings.post_header_emoji ?? "📰"));
+  const [readMore, setReadMore] = useState(String(settings.post_read_more_label ?? "Read the full report"));
+  const [footer, setFooter] = useState(String(settings.post_footer_text ?? ""));
+  const [defaultTags, setDefaultTags] = useState(tagsToText(settings.post_default_hashtags));
+  const categoryTags: Record<string, string[]> =
+    settings.post_category_hashtags && typeof settings.post_category_hashtags === "object"
+      ? settings.post_category_hashtags
+      : {};
+  const [catTags, setCatTags] = useState<Record<string, string>>(
+    Object.fromEntries(CATEGORIES.map((c) => [c, tagsToText(categoryTags[c])])),
+  );
+
+  const preview = [
+    bool("post_show_category") ? `${emoji} WAR` : null,
+    "Iranian navy escorts tanker convoy through Strait of Hormuz",
+    bool("post_show_summary")
+      ? "Three IRGC fast-attack craft shadowed the convoy for six hours, Tasnim reported, the first such escort since the June strikes. Shipping insurers raised Gulf war-risk premiums by 12% within the day."
+      : null,
+    bool("post_show_source_name") || bool("post_show_timestamp")
+      ? `🗞 ${bool("post_show_source_name") ? "Tasnim" : ""}${bool("post_show_timestamp") ? " · 14 Feb 2026, 09:20" : ""}`
+      : null,
+    bool("post_show_source_link") ? readMore || "Read more" : null,
+    bool("post_show_hashtags")
+      ? [...textToTags(catTags.war ?? ""), ...textToTags(defaultTags)].slice(0, 6).join(" ")
+      : null,
+    footer.trim() || null,
+  ].filter(Boolean) as string[];
+
+  return (
+    <div className="space-y-4">
+      <Panel title="Message parts" hint="Every toggle applies to the next published message.">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {FORMAT_TOGGLES.map(([key, label, hint]) => (
+            <div key={key} className="flex items-start justify-between gap-3 rounded-md border border-border p-3">
+              <div>
+                <p className="text-sm font-medium">{label}</p>
+                <p className="text-xs text-muted-foreground">{hint}</p>
+              </div>
+              <Switch
+                checked={bool(key, key === "post_link_preview" ? false : true)}
+                onCheckedChange={(v) => onSave({ [key]: v })}
+              />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Wording" hint="Header emoji, link label and an optional footer line (e.g. your channel name).">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <Label htmlFor="fmt-emoji">Header emoji</Label>
+            <Input id="fmt-emoji" value={emoji} onChange={(e) => setEmoji(e.target.value)} maxLength={8} />
+          </div>
+          <div>
+            <Label htmlFor="fmt-link">Link label</Label>
+            <Input id="fmt-link" value={readMore} onChange={(e) => setReadMore(e.target.value)} maxLength={60} />
+          </div>
+          <div>
+            <Label htmlFor="fmt-footer">Footer line</Label>
+            <Input id="fmt-footer" value={footer} onChange={(e) => setFooter(e.target.value)} maxLength={200} />
+          </div>
+        </div>
+        <Button
+          size="sm"
+          disabled={saving}
+          onClick={() =>
+            onSave({
+              post_header_emoji: emoji,
+              post_read_more_label: readMore,
+              post_footer_text: footer,
+            })
+          }
+        >
+          Save wording
+        </Button>
+      </Panel>
+
+      <Panel title="Hashtags" hint="Space-separated. Category tags are added before the default tags, max 6 per post.">
+        <div>
+          <Label htmlFor="fmt-tags">Default hashtags (every post)</Label>
+          <Input id="fmt-tags" value={defaultTags} onChange={(e) => setDefaultTags(e.target.value)} placeholder="#Iran #MiddleEast" />
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {CATEGORIES.map((c) => (
+            <div key={c}>
+              <Label htmlFor={`fmt-tag-${c}`} className="text-xs uppercase tracking-wide text-muted-foreground">{c}</Label>
+              <Input
+                id={`fmt-tag-${c}`}
+                value={catTags[c] ?? ""}
+                onChange={(e) => setCatTags((prev) => ({ ...prev, [c]: e.target.value }))}
+                placeholder="#Tag"
+              />
+            </div>
+          ))}
+        </div>
+        <Button
+          size="sm"
+          disabled={saving}
+          onClick={() =>
+            onSave({
+              post_default_hashtags: textToTags(defaultTags),
+              post_category_hashtags: Object.fromEntries(
+                Object.entries(catTags).map(([k, v]) => [k, textToTags(v)]),
+              ),
+            })
+          }
+        >
+          Save hashtags
+        </Button>
+      </Panel>
+
+      <Panel title="Preview" hint="Approximate rendering of the next Telegram message.">
+        <div className="whitespace-pre-line rounded-md border border-border bg-muted/30 p-4 text-sm">
+          {preview.join("\n\n")}
+        </div>
+        {bool("post_show_images") ? (
+          <p className="text-xs text-muted-foreground">
+            When the source provides a photo it is sent as the message image and the text becomes the caption.
+          </p>
+        ) : null}
+      </Panel>
     </div>
   );
 }

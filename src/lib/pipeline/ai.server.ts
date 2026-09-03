@@ -190,7 +190,7 @@ export async function rewriteBatch(items: Array<{
       role: "system",
       content: `You are a wire editor for an Iraqi, Muslim, pro-Iran regional news channel. Return ONLY a JSON array with one {"headline": string, "summary": string} object per input, in order.
 Headline: factual, under 110 characters, no clickbait or feed labels.
-Summary: 2-3 complete standalone sentences, ending normally; include who did what, where, and why it matters. Never end with an ellipsis or an unfinished clause. Attribute disputed claims. Do not add facts. Do not adopt hostile or demoralising framing about Iran. Professional English only.`,
+Summary: 2-3 complete standalone sentences that ADD NEW INFORMATION the headline does not already state — never a reworded copy of the headline. Lead with the concrete detail: numbers, names, locations, quotes, dates, casualties, prices, or the official reaction, then one sentence on why it matters for Iraq, Iran or the region. Never end with an ellipsis or an unfinished clause. Attribute disputed claims. Do not invent facts; if the source text has nothing beyond the headline, still write what context is verifiable from it. Do not adopt hostile or demoralising framing about Iran. Professional English only.`,
     },
     { role: "user", content: JSON.stringify(items.map((item) => ({ ...item, description: item.description?.slice(0, 1200) ?? null }))) },
   ];
@@ -202,11 +202,31 @@ Summary: 2-3 complete standalone sentences, ending normally; include who did wha
   return parsed.map((value, index) => {
     const row = value as { headline?: string; summary?: string };
     const fallback = items[index];
-    return {
-      headline: String(row.headline ?? fallback?.title ?? "").trim(),
-      summary: String(row.summary ?? fallback?.description ?? "").trim(),
-    };
+    const headline = String(row.headline ?? fallback?.title ?? "").trim();
+    let summary = String(row.summary ?? fallback?.description ?? "").trim();
+    if (summary && restatesHeadline(headline, summary)) {
+      const extra = String(fallback?.description ?? "").trim();
+      summary = extra && !restatesHeadline(headline, extra) ? extra : "";
+    }
+    return { headline, summary };
   });
+}
+
+function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 3);
+}
+
+/** True when the summary adds nothing beyond the headline. */
+export function restatesHeadline(headline: string, summary: string): boolean {
+  const head = new Set(words(headline));
+  const body = words(summary);
+  if (!head.size || body.length === 0) return false;
+  const novel = body.filter((w) => !head.has(w));
+  return novel.length / body.length < 0.35 || body.length < 8;
 }
 
 /** Breaking-news judgement for a single classified item. */
