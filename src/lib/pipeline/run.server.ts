@@ -42,6 +42,29 @@ function isPaused(settings: Settings): boolean {
   return Boolean(settings["bot_paused"]);
 }
 
+/** Maps admin settings rows onto the Telegram presentation options. */
+export function postFormat(settings: Settings): PostFormat {
+  const bool = (key: string, fallback: boolean) =>
+    settings[key] === undefined || settings[key] === null ? fallback : Boolean(settings[key]);
+  const tags = settings["post_default_hashtags"];
+  const map = settings["post_category_hashtags"];
+  return {
+    showCategory: bool("post_show_category", DEFAULT_POST_FORMAT.showCategory),
+    showSourceName: bool("post_show_source_name", DEFAULT_POST_FORMAT.showSourceName),
+    showSourceLink: bool("post_show_source_link", DEFAULT_POST_FORMAT.showSourceLink),
+    showTimestamp: bool("post_show_timestamp", DEFAULT_POST_FORMAT.showTimestamp),
+    showSummary: bool("post_show_summary", DEFAULT_POST_FORMAT.showSummary),
+    showImages: bool("post_show_images", DEFAULT_POST_FORMAT.showImages),
+    linkPreview: bool("post_link_preview", DEFAULT_POST_FORMAT.linkPreview),
+    showHashtags: bool("post_show_hashtags", DEFAULT_POST_FORMAT.showHashtags),
+    headerEmoji: String(settings["post_header_emoji"] ?? DEFAULT_POST_FORMAT.headerEmoji),
+    readMoreLabel: String(settings["post_read_more_label"] ?? DEFAULT_POST_FORMAT.readMoreLabel),
+    footerText: String(settings["post_footer_text"] ?? ""),
+    defaultHashtags: Array.isArray(tags) ? tags.map(String) : DEFAULT_POST_FORMAT.defaultHashtags,
+    categoryHashtags: map && typeof map === "object" && !Array.isArray(map) ? (map as Record<string, string[]>) : {},
+  };
+}
+
 /* ------------------------------- INGEST ---------------------------------- */
 
 export interface IngestStats {
