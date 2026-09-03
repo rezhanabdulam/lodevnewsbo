@@ -862,7 +862,7 @@ export async function runPublish(
       };
 
       try {
-        await sendPost(Number(chat.chat_id), post);
+        await sendPost(Number(chat.chat_id), post, postFormat(settings));
         await supabaseAdmin.from("published_history").insert({
           dedup_key: item.dedup_key,
           chat_id: chat.chat_id,
