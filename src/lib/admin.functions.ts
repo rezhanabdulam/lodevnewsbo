@@ -82,6 +82,19 @@ const settingsSchema = z.object({
   bot_paused_reason: z.string().max(240).nullable().optional(),
   translation_mode: z.enum(["gemini_first","minimax_first","both"]).optional(),
   translation_model: z.string().min(2).max(120).optional(),
+  post_show_category: z.boolean().optional(),
+  post_show_source_name: z.boolean().optional(),
+  post_show_source_link: z.boolean().optional(),
+  post_show_timestamp: z.boolean().optional(),
+  post_show_summary: z.boolean().optional(),
+  post_show_images: z.boolean().optional(),
+  post_link_preview: z.boolean().optional(),
+  post_show_hashtags: z.boolean().optional(),
+  post_header_emoji: z.string().max(8).optional(),
+  post_read_more_label: z.string().max(60).optional(),
+  post_footer_text: z.string().max(200).optional(),
+  post_default_hashtags: z.array(z.string().max(40)).max(10).optional(),
+  post_category_hashtags: z.record(z.string(), z.array(z.string().max(40)).max(6)).optional(),
 });
 
 export const saveSettings = createServerFn({ method: "POST" })
