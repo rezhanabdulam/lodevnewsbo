@@ -499,6 +499,11 @@ function Dashboard() {
           </Panel>
         </TabsContent>
 
+        {/* FORMAT */}
+        <TabsContent value="format" className="mt-4">
+          <FormatTab settings={s} onSave={(patch) => mSettings.mutate(patch)} saving={mSettings.isPending} />
+        </TabsContent>
+
         {/* TRANSLATION */}
         <TabsContent value="translation" className="mt-4">
           <Panel
