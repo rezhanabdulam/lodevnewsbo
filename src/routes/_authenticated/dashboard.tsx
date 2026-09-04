@@ -169,7 +169,7 @@ function Dashboard() {
   }
 
   const s = data.settings as Record<string, any>;
-  const paused = Boolean(s.bot_paused);
+  const paused = Boolean(s["bot_paused"]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -200,7 +200,7 @@ function Dashboard() {
       {paused ? (
         <div className="mt-6 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           Services are paused. Ingest, publish, and Telegram webhook actions are blocked until you resume them.
-          {s.bot_paused_reason ? <span className="ml-2 text-destructive/80">Reason: {String(s.bot_paused_reason)}</span> : null}
+          {s["bot_paused_reason"] ? <span className="ml-2 text-destructive/80">Reason: {String(s["bot_paused_reason"])}</span> : null}
         </div>
       ) : null}
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -521,7 +521,7 @@ function Dashboard() {
                   <Button
                     key={value}
                     size="sm"
-                    variant={String(s.translation_mode ?? "gemini_first") === value ? "default" : "secondary"}
+                    variant={String(s["translation_mode"] ?? "gemini_first") === value ? "default" : "secondary"}
                     onClick={() => mSettings.mutate({ translation_mode: value })}
                   >
                     {label}
@@ -537,7 +537,7 @@ function Dashboard() {
 
             <TranslationKeyManager
               keys={translationData?.keys ?? []}
-              envDefaults={translationData?.envDefaults}
+              envDefaults={translationData?.envDefaults ?? { gemini: 0, minimax: false }}
               onSave={(payload) => mTranslationKey.mutate(payload)}
               onTest={(id) => mTranslationTest.mutate(id)}
               busy={mTranslationKey.isPending || mTranslationTest.isPending}
@@ -780,13 +780,13 @@ function FormatTab({
 }) {
   const bool = (key: string, fallback = true) =>
     settings[key] === undefined || settings[key] === null ? fallback : Boolean(settings[key]);
-  const [emoji, setEmoji] = useState(String(settings.post_header_emoji ?? "📰"));
-  const [readMore, setReadMore] = useState(String(settings.post_read_more_label ?? "Read the full report"));
-  const [footer, setFooter] = useState(String(settings.post_footer_text ?? ""));
-  const [defaultTags, setDefaultTags] = useState(tagsToText(settings.post_default_hashtags));
+  const [emoji, setEmoji] = useState(String(settings["post_header_emoji"] ?? "📰"));
+  const [readMore, setReadMore] = useState(String(settings["post_read_more_label"] ?? "Read the full report"));
+  const [footer, setFooter] = useState(String(settings["post_footer_text"] ?? ""));
+  const [defaultTags, setDefaultTags] = useState(tagsToText(settings["post_default_hashtags"]));
   const categoryTags: Record<string, string[]> =
-    settings.post_category_hashtags && typeof settings.post_category_hashtags === "object"
-      ? settings.post_category_hashtags
+    settings["post_category_hashtags"] && typeof settings["post_category_hashtags"] === "object"
+      ? settings["post_category_hashtags"]
       : {};
   const [catTags, setCatTags] = useState<Record<string, string>>(
     Object.fromEntries(CATEGORIES.map((c) => [c, tagsToText(categoryTags[c])])),
@@ -803,7 +803,7 @@ function FormatTab({
       : null,
     bool("post_show_source_link") ? readMore || "Read more" : null,
     bool("post_show_hashtags")
-      ? [...textToTags(catTags.war ?? ""), ...textToTags(defaultTags)].slice(0, 6).join(" ")
+      ? [...textToTags(catTags["war"] ?? ""), ...textToTags(defaultTags)].slice(0, 6).join(" ")
       : null,
     footer.trim() || null,
   ].filter(Boolean) as string[];

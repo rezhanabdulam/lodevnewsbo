@@ -303,7 +303,7 @@ async function loadTranslationKeys(): Promise<TranslationKey[]> {
 }
 
 function isAvailable(key: TranslationKey): boolean {
-  return !key.cooldown_until || Date.parse(key.cooldown_until) <= Date.now();
+  return !key["cooldown_until"] || Date.parse(key["cooldown_until"]) <= Date.now();
 }
 
 async function markTranslationKey(key: TranslationKey, status: number | null, errorText?: string) {
@@ -319,13 +319,13 @@ async function markTranslationKey(key: TranslationKey, status: number | null, er
     };
     if (status === 429 || status === 403) {
       const cooldownMinutes = status === 429 ? 10 : 60;
-      patch.cooldown_until = new Date(Date.now() + cooldownMinutes * 60_000).toISOString();
+      patch["cooldown_until"] = new Date(Date.now() + cooldownMinutes * 60_000).toISOString();
     } else if (status !== null && status >= 200 && status < 300) {
-      patch.cooldown_until = null;
-      patch.consecutive_failures = 0;
+      patch["cooldown_until"] = null;
+      patch["consecutive_failures"] = 0;
     }
     if (status !== null && status >= 400) {
-      patch.consecutive_failures = Math.min(10, (key.consecutive_failures ?? 0) + 1);
+      patch["consecutive_failures"] = Math.min(10, (key["consecutive_failures"] ?? 0) + 1);
     }
     await (supabaseAdmin as any).from("translation_provider_keys").update(patch).eq("id", key.id);
   } catch {
@@ -445,3 +445,19 @@ export async function translateToSorani(text: string): Promise<TranslationResult
   return { text: null, modelsTried: tried, detail: detail || "No translation provider is configured or available" };
 }
 
+
+/** Single-key translation used by the dashboard "test key" action. */
+export async function translateToSoraniWithKey(
+  key: TranslationKey,
+  text: string,
+): Promise<TranslationResult> {
+  const tried = [`${key.provider}:${key.model}`];
+  try {
+    const out = key.provider === "gemini"
+      ? await geminiTranslate(key, text)
+      : await minimaxTranslate(key, text);
+    return { text: out, modelsTried: tried };
+  } catch (err) {
+    return { text: null, modelsTried: tried, detail: err instanceof Error ? err.message : String(err) };
+  }
+}
