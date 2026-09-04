@@ -1406,3 +1406,26 @@ Implement in this order:
 This document supersedes older statements in the repository that mention
 `sent`, Gemini Sorani translation, global source penalties, a single universal
 freshness window, or the first-user-only admin assumption.
+
+## Post format (admin-configurable)
+
+`settings.post_*` columns drive `PostFormat` in `src/lib/pipeline/telegram.server.ts`
+(mapped by `postFormat()` in `run.server.ts`):
+
+- `post_show_category`, `post_show_summary`, `post_show_source_name`,
+  `post_show_timestamp`, `post_show_source_link`, `post_show_images`,
+  `post_link_preview`, `post_show_hashtags` — on/off toggles per message part.
+- `post_header_emoji`, `post_read_more_label`, `post_footer_text` — wording.
+- `post_default_hashtags` (array) and `post_category_hashtags` (category → array);
+  category tags come first, deduped, max 6 per post.
+
+Images are pulled from the source itself: `extractImage()` in
+`fetchers.server.ts` reads `media:content`, `media:thumbnail`, image
+`enclosure`, channel `<image><url>` or an inline `<img src>`; NewsData supplies
+`image_url`. When present and enabled the message is sent with `sendPhoto`
+(text becomes the caption); otherwise `sendMessage` with link preview governed
+by `post_link_preview`.
+
+Summary quality: `rewriteBatch` must add information the headline lacks;
+`restatesHeadline()` in `ai.server.ts` drops summaries whose novel-word ratio
+is under 35% and falls back to the source description.
