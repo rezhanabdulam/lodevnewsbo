@@ -780,13 +780,13 @@ function FormatTab({
 }) {
   const bool = (key: string, fallback = true) =>
     settings[key] === undefined || settings[key] === null ? fallback : Boolean(settings[key]);
-  const [emoji, setEmoji] = useState(String(settings.post_header_emoji ?? "📰"));
-  const [readMore, setReadMore] = useState(String(settings.post_read_more_label ?? "Read the full report"));
-  const [footer, setFooter] = useState(String(settings.post_footer_text ?? ""));
-  const [defaultTags, setDefaultTags] = useState(tagsToText(settings.post_default_hashtags));
+  const [emoji, setEmoji] = useState(String(settings["post_header_emoji"] ?? "📰"));
+  const [readMore, setReadMore] = useState(String(settings["post_read_more_label"] ?? "Read the full report"));
+  const [footer, setFooter] = useState(String(settings["post_footer_text"] ?? ""));
+  const [defaultTags, setDefaultTags] = useState(tagsToText(settings["post_default_hashtags"]));
   const categoryTags: Record<string, string[]> =
-    settings.post_category_hashtags && typeof settings.post_category_hashtags === "object"
-      ? settings.post_category_hashtags
+    settings["post_category_hashtags"] && typeof settings["post_category_hashtags"] === "object"
+      ? settings["post_category_hashtags"]
       : {};
   const [catTags, setCatTags] = useState<Record<string, string>>(
     Object.fromEntries(CATEGORIES.map((c) => [c, tagsToText(categoryTags[c])])),
@@ -803,7 +803,7 @@ function FormatTab({
       : null,
     bool("post_show_source_link") ? readMore || "Read more" : null,
     bool("post_show_hashtags")
-      ? [...textToTags(catTags.war ?? ""), ...textToTags(defaultTags)].slice(0, 6).join(" ")
+      ? [...textToTags(catTags["war"] ?? ""), ...textToTags(defaultTags)].slice(0, 6).join(" ")
       : null,
     footer.trim() || null,
   ].filter(Boolean) as string[];
