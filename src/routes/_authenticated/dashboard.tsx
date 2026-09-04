@@ -169,7 +169,7 @@ function Dashboard() {
   }
 
   const s = data.settings as Record<string, any>;
-  const paused = Boolean(s.bot_paused);
+  const paused = Boolean(s["bot_paused"]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -200,7 +200,7 @@ function Dashboard() {
       {paused ? (
         <div className="mt-6 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           Services are paused. Ingest, publish, and Telegram webhook actions are blocked until you resume them.
-          {s.bot_paused_reason ? <span className="ml-2 text-destructive/80">Reason: {String(s.bot_paused_reason)}</span> : null}
+          {s["bot_paused_reason"] ? <span className="ml-2 text-destructive/80">Reason: {String(s["bot_paused_reason"])}</span> : null}
         </div>
       ) : null}
       <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -521,7 +521,7 @@ function Dashboard() {
                   <Button
                     key={value}
                     size="sm"
-                    variant={String(s.translation_mode ?? "gemini_first") === value ? "default" : "secondary"}
+                    variant={String(s["translation_mode"] ?? "gemini_first") === value ? "default" : "secondary"}
                     onClick={() => mSettings.mutate({ translation_mode: value })}
                   >
                     {label}

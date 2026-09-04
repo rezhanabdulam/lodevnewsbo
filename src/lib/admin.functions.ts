@@ -268,15 +268,15 @@ export const upsertTranslationKey = createServerFn({ method: "POST" })
       enabled: data.enabled ?? true,
       priority: data.priority ?? 100,
     };
-    if (data.api_key?.trim()) row.api_key = data.api_key.trim();
+    if (data["api_key"]?.trim()) row.api_key = data["api_key"]!.trim();
 
     if (data.id) {
       // An edit without a new key keeps the existing secret.
       const { error } = await sb.from("translation_provider_keys").update(row).eq("id", data.id);
       if (error) throw new Error(error.message);
     } else {
-      if (!data.api_key?.trim()) throw new Error("API key is required when adding a provider key");
-      const { error } = await sb.from("translation_provider_keys").insert({ ...row, api_key: data.api_key.trim() });
+      if (!data["api_key"]?.trim()) throw new Error("API key is required when adding a provider key");
+      const { error } = await sb.from("translation_provider_keys").insert({ ...row, api_key: data["api_key"]!.trim() });
       if (error) throw new Error(error.message);
     }
     return { ok: true };
