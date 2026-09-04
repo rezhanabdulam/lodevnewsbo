@@ -268,7 +268,7 @@ export const upsertTranslationKey = createServerFn({ method: "POST" })
       enabled: data.enabled ?? true,
       priority: data.priority ?? 100,
     };
-    if (data["api_key"]?.trim()) row.api_key = data["api_key"]!.trim();
+    if (data["api_key"]?.trim()) row["api_key"] = data["api_key"]!.trim();
 
     if (data.id) {
       // An edit without a new key keeps the existing secret.

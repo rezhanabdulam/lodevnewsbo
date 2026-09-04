@@ -537,7 +537,7 @@ function Dashboard() {
 
             <TranslationKeyManager
               keys={translationData?.keys ?? []}
-              envDefaults={translationData?.envDefaults}
+              envDefaults={translationData?.envDefaults ?? { gemini: 0, minimax: false }}
               onSave={(payload) => mTranslationKey.mutate(payload)}
               onTest={(id) => mTranslationTest.mutate(id)}
               busy={mTranslationKey.isPending || mTranslationTest.isPending}

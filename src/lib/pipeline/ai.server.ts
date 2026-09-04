@@ -445,3 +445,19 @@ export async function translateToSorani(text: string): Promise<TranslationResult
   return { text: null, modelsTried: tried, detail: detail || "No translation provider is configured or available" };
 }
 
+
+/** Single-key translation used by the dashboard "test key" action. */
+export async function translateToSoraniWithKey(
+  key: TranslationKey,
+  text: string,
+): Promise<TranslationResult> {
+  const tried = [`${key.provider}:${key.model}`];
+  try {
+    const out = key.provider === "gemini"
+      ? await geminiTranslate(key, text)
+      : await minimaxTranslate(key, text);
+    return { text: out, modelsTried: tried };
+  } catch (err) {
+    return { text: null, modelsTried: tried, detail: err instanceof Error ? err.message : String(err) };
+  }
+}
