@@ -97,25 +97,95 @@ function unwrapAggregatorUrl(raw: string): string {
   }
 }
 
-/** Best-effort thumbnail extraction from an RSS <item> block. */
-function extractImage(block: string): string | null {
+/** Rejects tracking pixels, spacers, logos and other non-editorial artwork. */
+function usableImage(url: string): boolean {
+  if (!/^https?:\/\//i.test(url)) return false;
+  const lower = url.toLowerCase();
+  if (/\.(svg|gif|ico)(\?|$)/.test(lower.split("#")[0]!)) return false;
+  if (/(1x1|pixel|spacer|blank|transparent|placeholder|avatar|favicon|logo_|_logo|\/logo|sprite)/.test(lower)) return false;
+  if (/\b(width|w|h)=(\d{1,2})\b/.test(lower)) return false;
+  return true;
+}
+
+/** Turns protocol-relative and relative image paths into absolute URLs. */
+function absoluteImage(raw: string, pageUrl: string): string | null {
+  const url = raw.trim().replace(/&amp;/g, "&");
+  if (!url) return null;
+  try {
+    if (url.startsWith("//")) return `https:${url}`;
+    if (/^https?:\/\//i.test(url)) return url;
+    return new URL(url, pageUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort thumbnail extraction from an RSS <item>/<entry> block.
+ * Feeds are wildly inconsistent, so every known carrier is tried and the URL
+ * is accepted on plausibility rather than on a file extension — most CDNs
+ * serve images from extension-less, query-string URLs.
+ */
+function extractImage(block: string, pageUrl: string): string | null {
   const patterns = [
     /<media:content[^>]+url=["']([^"']+)["']/i,
     /<media:thumbnail[^>]+url=["']([^"']+)["']/i,
+    /<media:group[\s\S]*?url=["']([^"']+)["']/i,
     /<enclosure[^>]+url=["']([^"']+)["'][^>]*type=["']image/i,
     /<enclosure[^>]+type=["']image[^"']*["'][^>]*url=["']([^"']+)["']/i,
+    /<itunes:image[^>]+href=["']([^"']+)["']/i,
     /<image[^>]*>\s*<url>([\s\S]*?)<\/url>/i,
+    /<thumbnail[^>]+url=["']([^"']+)["']/i,
     /<img[^>]+src=["']([^"']+)["']/i,
-    /&lt;img[^&]*src=["']([^"']+)["']/i,
+    /<img[^>]+data-src=["']([^"']+)["']/i,
+    /&lt;img[^&]*src=(?:["']|&quot;)([^"'&]+)/i,
+    /<content:encoded>[\s\S]*?src=["']([^"']+)["']/i,
   ];
   for (const re of patterns) {
-    const url = block.match(re)?.[1]?.trim();
-    if (url && /^https?:\/\//i.test(url) && /\.(jpe?g|png|webp)(\?|$)/i.test(url.split("#")[0]!)) {
-      return url;
-    }
-    if (url && /^https?:\/\//i.test(url) && re.source.startsWith("<media")) return url;
+    const raw = block.match(re)?.[1];
+    if (!raw) continue;
+    const url = absoluteImage(raw, pageUrl);
+    if (url && usableImage(url)) return url;
   }
   return null;
+}
+
+const HTML_HEADERS = {
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  accept: "text/html,application/xhtml+xml",
+};
+
+/**
+ * Last-resort image lookup: reads the article page and takes its social
+ * preview image (og:image / twitter:image / first article <img>).
+ * Used only for stories the feed gave no picture for.
+ */
+export async function fetchArticleImage(pageUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(pageUrl, { headers: HTML_HEADERS, redirect: "follow" });
+    if (!res.ok) return null;
+    const html = (await res.text()).slice(0, 400_000);
+    const metas = [
+      /<meta[^>]+property=["']og:image:secure_url["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+      /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
+      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
+      /<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i,
+      /"(?:image|thumbnailUrl)"\s*:\s*"(https?:\/\/[^"]+)"/i,
+      /<article[\s\S]{0,4000}?<img[^>]+src=["']([^"']+)["']/i,
+    ];
+    for (const re of metas) {
+      const raw = html.match(re)?.[1];
+      if (!raw) continue;
+      const url = absoluteImage(raw.replace(/\\\//g, "/"), pageUrl);
+      if (url && usableImage(url)) return url;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function parseRssItems(
@@ -123,15 +193,19 @@ function parseRssItems(
   provider: string,
   fallbackSource: string | null,
 ): FetchedArticle[] {
-  const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
+  const items = [
+    ...(xml.match(/<item[\s>][\s\S]*?<\/item>/g) ?? []),
+    ...(xml.match(/<entry[\s>][\s\S]*?<\/entry>/g) ?? []),
+  ];
   return items
     .map((block): FetchedArticle | null => {
       const title = tag(block, "title");
-      const rawLink = tag(block, "link");
+      const rawLink =
+        tag(block, "link") ?? block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] ?? null;
       if (!title || !rawLink) return null;
       const link = unwrapAggregatorUrl(rawLink);
       const rawSource = tag(block, "source") ?? fallbackSource;
-      const description = tag(block, "description");
+      const description = tag(block, "description") ?? tag(block, "summary");
       const source =
         rawSource && !/bing|google|news\.google|msn/i.test(rawSource)
           ? rawSource
@@ -142,12 +216,16 @@ function parseRssItems(
         url: link,
         title,
         description,
-        imageUrl: extractImage(block),
-        publishedAt: effectivePublishedAt(tag(block, "pubDate"), `${title} ${description ?? ""}`),
+        imageUrl: extractImage(block, link),
+        publishedAt: effectivePublishedAt(
+          tag(block, "pubDate") ?? tag(block, "published") ?? tag(block, "updated"),
+          `${title} ${description ?? ""}`,
+        ),
       };
     })
     .filter((a): a is FetchedArticle => a !== null);
 }
+
 
 const RSS_HEADERS = {
   "user-agent":
