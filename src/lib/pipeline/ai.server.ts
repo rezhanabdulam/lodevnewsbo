@@ -394,6 +394,67 @@ export function validateSorani(text: string): boolean {
   return SORANI_ALLOWED.test(text);
 }
 
+export const DEFAULT_TRANSLATION_MODELS = [
+  "google/gemini-3.6-flash",
+  "google/gemini-3.5-flash-lite",
+  "google/gemini-3.7-flash",
+  "google/gemini-3.8-flash",
+  "minimax/minimax-m3",
+];
+
+const SORANI_SYSTEM =
+  "Translate into Kurdish Sorani using Arabic script. Preserve names, numbers, URLs, acronyms and attribution. Output only the translation, with no preface, explanation or markdown.";
+
+interface VercelTranslationConfig {
+  enabled: boolean;
+  models: string[];
+}
+
+async function getVercelTranslationConfig(): Promise<VercelTranslationConfig> {
+  try {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data } = await (supabaseAdmin as any)
+      .from("settings")
+      .select("translation_use_vercel, translation_model_order")
+      .eq("id", 1)
+      .single();
+    const order = data?.translation_model_order;
+    return {
+      enabled: data?.translation_use_vercel !== false,
+      models: Array.isArray(order) && order.length ? order.map(String) : DEFAULT_TRANSLATION_MODELS,
+    };
+  } catch {
+    return { enabled: true, models: DEFAULT_TRANSLATION_MODELS };
+  }
+}
+
+/**
+ * Single translation attempt through the Vercel AI Gateway. One short request
+ * per article, no retries inside the call — the caller walks the model order.
+ */
+export async function vercelTranslate(model: string, text: string): Promise<string> {
+  const key =
+    process.env["VERCEL_AI_GATEWAY_API_KEY"] ?? process.env["AI_GATEWAY_API_KEY"];
+  if (!key) throw new Error("Missing VERCEL_AI_GATEWAY_API_KEY");
+  const res = await fetch(translationGateway, {
+    method: "POST",
+    headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: SORANI_SYSTEM },
+        { role: "user", content: text.slice(0, 900) },
+      ],
+      temperature: 0,
+      max_tokens: 320,
+    }),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`Vercel ${model} ${res.status}: ${body.slice(0, 200)}`);
+  const json = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content?.trim() ?? "";
+}
+
 async function getTranslationMode(): Promise<"gemini_first" | "minimax_first" | "both"> {
   try {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -411,6 +472,34 @@ export interface TranslationResult {
 }
 
 export async function translateToSorani(text: string): Promise<TranslationResult> {
+  const tried: string[] = [];
+  let detail = "";
+
+  // Preferred path: the paid Vercel AI Gateway, walked in the admin-defined
+  // model order. One request per model, stopping at the first valid Sorani.
+  const vercel = await getVercelTranslationConfig();
+  if (vercel.enabled) {
+    for (const model of vercel.models) {
+      tried.push(`vercel:${model}`);
+      try {
+        const out = await vercelTranslate(model, text);
+        if (validateSorani(out)) return { text: out, modelsTried: tried };
+        detail = `${model} returned output that failed Sorani validation`;
+      } catch (err) {
+        detail = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+
+  const fallback = await translateWithStoredKeys(text, tried, detail);
+  return fallback;
+}
+
+async function translateWithStoredKeys(
+  text: string,
+  tried: string[],
+  previousDetail: string,
+): Promise<TranslationResult> {
   const keys = (await loadTranslationKeys()).filter(isAvailable);
   const mode = await getTranslationMode();
 
@@ -427,8 +516,7 @@ export async function translateToSorani(text: string): Promise<TranslationResult
     ordered = mode === "minimax_first" ? minimax : gemini;
   }
 
-  const tried: string[] = [];
-  let detail = "";
+  let detail = previousDetail;
   for (const key of ordered) {
     tried.push(`${key.provider}:${key.model}`);
     try {
