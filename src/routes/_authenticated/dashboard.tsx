@@ -112,7 +112,7 @@ function Dashboard() {
     onSuccess: invalidate, onError,
   });
   const mRun = useMutation({
-    mutationFn: (action: "ingest" | "publishTop3") => runFn({ data: { action } }),
+    mutationFn: (action: "ingest" | "publishTop3" | "instant") => runFn({ data: { action } }),
     onSuccess: (res) => { toast.success(JSON.stringify(res.result).slice(0, 220)); invalidate(); },
     onError,
   });
@@ -469,6 +469,16 @@ function Dashboard() {
                     ? `${src.used_today}/${src.daily_quota} used today`
                     : "unlimited"}
                 </div>
+                {src.kind === "telegram" ? (
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                    value={src.config?.mode ?? "normal"}
+                    onChange={(e) => mSource.mutate({ id: src.id, mode: e.target.value })}
+                  >
+                    <option value="normal">Normal</option>
+                    <option value="instant">Instant</option>
+                  </select>
+                ) : null}
                 <Switch
                   checked={src.enabled}
                   onCheckedChange={(v) => mSource.mutate({ id: src.id, enabled: v })}
@@ -476,6 +486,34 @@ function Dashboard() {
               </div>
             ))}
             <AddSource onAdd={(payload) => mSource.mutate(payload)} />
+          </Panel>
+
+          <Panel
+            title="Instant channels"
+            hint="Telegram channels set to Instant are checked on this interval and published straight away. Related posts about the same person or place are merged into one message."
+          >
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <Label className="text-xs">Check every (minutes)</Label>
+                <Input
+                  type="number" min={1} max={120} className="mt-1 max-w-28"
+                  defaultValue={Number(s["instant_poll_minutes"] ?? 5)}
+                  onBlur={(e) => {
+                    const v = Number(e.target.value);
+                    if (v >= 1 && v <= 120 && v !== Number(s["instant_poll_minutes"] ?? 5)) {
+                      mSettings.mutate({ instant_poll_minutes: v });
+                    }
+                  }}
+                />
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => mRun.mutate("instant")} disabled={mRun.isPending || paused}>
+                Check instant channels now
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Last check:{" "}
+                {s["instant_last_run_at"] ? new Date(String(s["instant_last_run_at"])).toLocaleString() : "never"}
+              </p>
+            </div>
           </Panel>
 
           <Panel title="Topic queries" hint="Run against every enabled provider each cycle.">
@@ -535,6 +573,8 @@ function Dashboard() {
               </p>
             </div>
 
+            <VercelTranslationPanel settings={s} onSave={(patch) => mSettings.mutate(patch)} />
+
             <TranslationKeyManager
               keys={translationData?.keys ?? []}
               envDefaults={translationData?.envDefaults ?? { gemini: 0, minimax: false }}
@@ -566,6 +606,84 @@ function Dashboard() {
   );
 }
 
+
+const DEFAULT_TRANSLATION_MODELS = [
+  "google/gemini-3.6-flash",
+  "google/gemini-3.5-flash-lite",
+  "google/gemini-3.7-flash",
+  "google/gemini-3.8-flash",
+  "minimax/minimax-m3",
+];
+
+function VercelTranslationPanel({
+  settings,
+  onSave,
+}: {
+  settings: Record<string, any>;
+  onSave: (patch: Record<string, unknown>) => void;
+}) {
+  const stored = Array.isArray(settings["translation_model_order"]) && settings["translation_model_order"].length
+    ? (settings["translation_model_order"] as string[])
+    : DEFAULT_TRANSLATION_MODELS;
+  const [order, setOrder] = useState<string[]>(stored);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const enabled = settings["translation_use_vercel"] !== false;
+
+  function move(from: number, to: number) {
+    if (from === to) return;
+    const next = [...order];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item!);
+    setOrder(next);
+    onSave({ translation_model_order: next });
+  }
+
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">Paid translation service</p>
+          <p className="text-xs text-muted-foreground">
+            When on, Sorani translation uses your paid key first and only falls back to the keys below if every model fails.
+          </p>
+        </div>
+        <Switch checked={enabled} onCheckedChange={(v) => onSave({ translation_use_vercel: v })} />
+      </div>
+
+      <Separator className="my-3" />
+      <p className="text-xs text-muted-foreground">
+        Drag to set the order models are tried in. The first one that returns good Sorani is used.
+      </p>
+      <ul className="mt-2 space-y-1">
+        {order.map((model, index) => (
+          <li
+            key={model}
+            draggable
+            onDragStart={() => setDragging(index)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => { if (dragging !== null) move(dragging, index); setDragging(null); }}
+            className="flex cursor-grab items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+          >
+            <span className="text-xs text-muted-foreground">{index + 1}</span>
+            <span className="flex-1">{model}</span>
+            <button
+              type="button" className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => move(index, Math.max(0, index - 1))}
+            >
+              ↑
+            </button>
+            <button
+              type="button" className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => move(index, Math.min(order.length - 1, index + 1))}
+            >
+              ↓
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function TranslationKeyManager({
   keys,
@@ -716,10 +834,13 @@ function AddTopic({ onAdd }: { onAdd: (v: { query: string; category: string }) =
 function AddSource({
   onAdd,
 }: {
-  onAdd: (v: { name: string; kind: string; secret_ref: string | null; daily_quota: number | null }) => void;
+  onAdd: (v: {
+    name: string; kind: string; secret_ref: string | null; daily_quota: number | null; mode?: string;
+  }) => void;
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("rss");
+  const [mode, setMode] = useState("normal");
   const [secretRef, setSecretRef] = useState("");
   return (
     <div className="flex flex-wrap gap-2">
@@ -729,12 +850,21 @@ function AddSource({
         <option value="newsdata">NewsData</option>
         <option value="telegram">Telegram channel</option>
       </select>
+      {kind === "telegram" ? (
+        <select className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={mode} onChange={(e) => setMode(e.target.value)}>
+          <option value="normal">Normal (with the regular cycle)</option>
+          <option value="instant">Instant (checked every few minutes)</option>
+        </select>
+      ) : null}
       <Input className="max-w-48" placeholder="SECRET_NAME (optional)" value={secretRef} onChange={(e) => setSecretRef(e.target.value)} />
       <Button
         size="sm" variant="secondary"
         onClick={() => {
           if (!name.trim()) return;
-          onAdd({ name: name.trim(), kind, secret_ref: secretRef.trim() || null, daily_quota: null });
+          onAdd({
+            name: name.trim(), kind, secret_ref: secretRef.trim() || null, daily_quota: null,
+            ...(kind === "telegram" ? { mode } : {}),
+          });
           setName(""); setSecretRef("");
         }}
       >
