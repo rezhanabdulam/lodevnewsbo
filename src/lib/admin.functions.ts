@@ -81,6 +81,9 @@ const settingsSchema = z.object({
   bot_paused: z.boolean().optional(),
   bot_paused_reason: z.string().max(240).nullable().optional(),
   translation_mode: z.enum(["gemini_first","minimax_first","both"]).optional(),
+  translation_use_vercel: z.boolean().optional(),
+  translation_model_order: z.array(z.string().min(2).max(80)).max(12).optional(),
+  instant_poll_minutes: z.number().int().min(1).max(120).optional(),
   translation_model: z.string().min(2).max(120).optional(),
   post_show_category: z.boolean().optional(),
   post_show_source_name: z.boolean().optional(),
@@ -183,6 +186,7 @@ export const upsertSource = createServerFn({ method: "POST" })
         priority: z.number().int().min(1).max(999).optional(),
         daily_quota: z.number().int().min(0).max(1_000_000).nullable().optional(),
         enabled: z.boolean().optional(),
+        mode: z.enum(["normal", "instant"]).optional(),
         remove: z.boolean().optional(),
       })
       .parse(input),
@@ -195,9 +199,19 @@ export const upsertSource = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message);
       return { ok: true };
     }
-    const { id, remove: _remove, ...rest } = data;
+    const { id, remove: _remove, mode, ...rest } = data;
     if (id) {
-      const { error } = await sb.from("sources").update(rest as never).eq("id", id);
+      const patch: Record<string, unknown> = { ...rest };
+      if (mode) {
+        // Telegram monitors keep their channel handle and polling mode in config.
+        const { data: current } = await (sb as any).from("sources").select("config,name").eq("id", id).single();
+        patch["config"] = {
+          ...(current?.config ?? {}),
+          channel: String(current?.config?.channel ?? current?.name ?? "").replace(/^@/, ""),
+          mode,
+        };
+      }
+      const { error } = await sb.from("sources").update(patch as never).eq("id", id);
       if (error) throw new Error(error.message);
       return { ok: true };
     }
@@ -211,7 +225,7 @@ export const upsertSource = createServerFn({ method: "POST" })
       // Telegram monitors store the channel handle so the scraper can find it.
       config:
         kind === "telegram"
-          ? { channel: rest.name!.replace(/^@/, "").trim() }
+          ? { channel: rest.name!.replace(/^@/, "").trim(), mode: mode ?? "normal" }
           : {},
     });
 
@@ -305,12 +319,16 @@ export const testTranslationKey = createServerFn({ method: "POST" })
 export const runPipelineNow = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: unknown) =>
-    z.object({ action: z.enum(["ingest", "publishTop3"]) }).parse(input),
+    z.object({ action: z.enum(["ingest", "publishTop3", "instant"]) }).parse(input),
   )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     const { runIngest, runPublish } = await import("@/lib/pipeline/run.server");
     if (data.action === "ingest") return { result: await runIngest() };
+    if (data.action === "instant") {
+      const { runInstant } = await import("@/lib/pipeline/instant.server");
+      return { result: await runInstant() };
+    }
     return { result: await runPublish({ force: 3 }) };
   });
 

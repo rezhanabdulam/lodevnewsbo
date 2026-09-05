@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as ApiPublicCronIngestRouteImport } from './routes/api/public/cron/ingest'
+import { Route as ApiPublicCronInstantRouteImport } from './routes/api/public/cron/instant'
 import { Route as ApiPublicCronPublishRouteImport } from './routes/api/public/cron/publish'
 import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
 
@@ -35,6 +36,11 @@ const ApiPublicCronIngestRoute = ApiPublicCronIngestRouteImport.update({
   path: '/api/public/cron/ingest',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicCronInstantRoute = ApiPublicCronInstantRouteImport.update({
+  id: '/api/public/cron/instant',
+  path: '/api/public/cron/instant',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicCronPublishRoute = ApiPublicCronPublishRouteImport.update({
   id: '/api/public/cron/publish',
   path: '/api/public/cron/publish',
@@ -51,6 +57,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/public/cron/ingest': typeof ApiPublicCronIngestRoute
+  '/api/public/cron/instant': typeof ApiPublicCronInstantRoute
   '/api/public/cron/publish': typeof ApiPublicCronPublishRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
@@ -58,6 +65,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/public/cron/ingest': typeof ApiPublicCronIngestRoute
+  '/api/public/cron/instant': typeof ApiPublicCronInstantRoute
   '/api/public/cron/publish': typeof ApiPublicCronPublishRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
@@ -67,6 +75,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/public/cron/ingest': typeof ApiPublicCronIngestRoute
+  '/api/public/cron/instant': typeof ApiPublicCronInstantRoute
   '/api/public/cron/publish': typeof ApiPublicCronPublishRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
@@ -76,6 +85,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/api/public/cron/ingest'
+    | '/api/public/cron/instant'
     | '/api/public/cron/publish'
     | '/api/public/telegram/webhook'
   fileRoutesByTo: FileRoutesByTo
@@ -83,6 +93,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dashboard'
     | '/api/public/cron/ingest'
+    | '/api/public/cron/instant'
     | '/api/public/cron/publish'
     | '/api/public/telegram/webhook'
   id:
@@ -91,6 +102,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/_authenticated/dashboard'
     | '/api/public/cron/ingest'
+    | '/api/public/cron/instant'
     | '/api/public/cron/publish'
     | '/api/public/telegram/webhook'
   fileRoutesById: FileRoutesById
@@ -99,6 +111,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   ApiPublicCronIngestRoute: typeof ApiPublicCronIngestRoute
+  ApiPublicCronInstantRoute: typeof ApiPublicCronInstantRoute
   ApiPublicCronPublishRoute: typeof ApiPublicCronPublishRoute
   ApiPublicTelegramWebhookRoute: typeof ApiPublicTelegramWebhookRoute
 }
@@ -133,6 +146,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicCronIngestRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/cron/instant': {
+      id: '/api/public/cron/instant'
+      path: '/api/public/cron/instant'
+      fullPath: '/api/public/cron/instant'
+      preLoaderRoute: typeof ApiPublicCronInstantRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/cron/publish': {
       id: '/api/public/cron/publish'
       path: '/api/public/cron/publish'
@@ -165,6 +185,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   ApiPublicCronIngestRoute: ApiPublicCronIngestRoute,
+  ApiPublicCronInstantRoute: ApiPublicCronInstantRoute,
   ApiPublicCronPublishRoute: ApiPublicCronPublishRoute,
   ApiPublicTelegramWebhookRoute: ApiPublicTelegramWebhookRoute,
 }
