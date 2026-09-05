@@ -232,6 +232,8 @@ export type Database = {
           event_similarity_threshold: number
           gold_move_threshold: number
           id: number
+          instant_last_run_at: string | null
+          instant_poll_minutes: number
           last_published_at: string | null
           next_publish_at: string | null
           night_end: string
@@ -253,6 +255,8 @@ export type Database = {
           post_show_summary: boolean
           post_show_timestamp: boolean
           timezone: string
+          translation_model_order: Json
+          translation_use_vercel: boolean
           updated_at: string
         }
         Insert: {
@@ -269,6 +273,8 @@ export type Database = {
           event_similarity_threshold?: number
           gold_move_threshold?: number
           id?: number
+          instant_last_run_at?: string | null
+          instant_poll_minutes?: number
           last_published_at?: string | null
           next_publish_at?: string | null
           night_end?: string
@@ -290,6 +296,8 @@ export type Database = {
           post_show_summary?: boolean
           post_show_timestamp?: boolean
           timezone?: string
+          translation_model_order?: Json
+          translation_use_vercel?: boolean
           updated_at?: string
         }
         Update: {
@@ -306,6 +314,8 @@ export type Database = {
           event_similarity_threshold?: number
           gold_move_threshold?: number
           id?: number
+          instant_last_run_at?: string | null
+          instant_poll_minutes?: number
           last_published_at?: string | null
           next_publish_at?: string | null
           night_end?: string
@@ -327,6 +337,8 @@ export type Database = {
           post_show_summary?: boolean
           post_show_timestamp?: boolean
           timezone?: string
+          translation_model_order?: Json
+          translation_use_vercel?: boolean
           updated_at?: string
         }
         Relationships: []
