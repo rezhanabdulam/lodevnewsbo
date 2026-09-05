@@ -787,6 +787,10 @@ export async function runPublish(
 
   for (const item of items as any[]) {
     const memberIds = ((item._members ?? [item]) as any[]).map((member) => member.id);
+    // A clustered story inherits artwork from whichever member has it.
+    if (!item.image_url) {
+      item.image_url = ((item._members ?? []) as any[]).map((m) => m.image_url).find(Boolean) ?? null;
+    }
     const { data: claimedRows } = await supabaseAdmin
       .from("queue")
       .update({ status: "publishing" })
