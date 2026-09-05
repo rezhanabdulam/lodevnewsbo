@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { fetchPublisherFeeds, fetchRssSearch, fetchNewsData } from "./fetchers.server";
+import { fetchPublisherFeeds, fetchRssSearch, fetchNewsData, fetchArticleImage } from "./fetchers.server";
 import {
   canonicalKey,
   cleanEditorialText,
@@ -372,6 +372,8 @@ export async function runIngest(): Promise<IngestStats> {
     }),
   );
 
+  let imageBudget = 60;
+
   for (let i = 0; i < fresh.length; i++) {
     const entry = fresh[i];
     if (!entry) continue;
@@ -423,6 +425,14 @@ export async function runIngest(): Promise<IngestStats> {
       stats.duplicate += 1;
       rejects.push(rejectRow(article, key, "duplicate event cooldown", category));
       continue;
+    }
+
+    // Image backfill: feeds often omit artwork, so the article page's social
+    // preview image is read for anything still missing one. Budgeted so a big
+    // ingest never turns into hundreds of page fetches.
+    if (!article.imageUrl && imageBudget > 0) {
+      imageBudget -= 1;
+      article.imageUrl = await fetchArticleImage(article.url);
     }
 
     const { data: inserted } = await supabaseAdmin
@@ -870,6 +880,15 @@ export async function runPublish(
       const extraSources: PostSource[] = (item._members ?? [])
         .slice(1)
         .map((m: any) => ({ name: m.source_name || hostname(m.url), url: m.url }));
+
+      if (!item.image_url && !item.image_checked) {
+        item.image_checked = true;
+        const late = await fetchArticleImage(item.url);
+        if (late) {
+          item.image_url = late;
+          await supabaseAdmin.from("queue").update({ image_url: late }).eq("id", item.id);
+        }
+      }
 
       const post: OutgoingPost = {
         headline,
