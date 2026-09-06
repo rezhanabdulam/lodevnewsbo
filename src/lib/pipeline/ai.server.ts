@@ -146,7 +146,7 @@ export async function rewrite(item: {
       content: `You are a wire editor. Return ONLY JSON: {"headline": string, "summary": string}.
 Rules:
 - headline: clear, factual, under 110 characters, no clickbait, no emoji.
-- summary: 2-3 complete sentences that ADD information beyond the headline. Never repeat the headline wording.
+- summary: let the story decide the length. A thin routine item may need one tight sentence; a major strike, speech or market move deserves a fuller 4-6 sentence brief. Never pad to hit a length and never cut a story short that has more verified substance. Every sentence must ADD information beyond the headline and never repeat its wording.
 - Pull the key figure, number or quote INTO the summary sentences, never trailing at the end.
 - Never end mid-sentence and never use an ellipsis.
 - If a claim comes from one side (a government, military spokesperson or state media) and is not independently confirmed, keep the attribution inside the sentence: "Iran says...", "Israel says...", "the Pentagon says...".
