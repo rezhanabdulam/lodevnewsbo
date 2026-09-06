@@ -57,6 +57,7 @@ export const JUNK_TITLE_PATTERNS: RegExp[] = [
  */
 export const SOFT_NEWS_PATTERNS: RegExp[] = [
   /\b(football|soccer|volleyball|basketball|wrestling|weightlifting|futsal|goalkeep\w*|striker|midfielder|league|premier league|world cup|olympic|championship|tournament|match|derby|coach|club|esteghlal|persepolis|sepahan|tractor)\b/i,
+  /\b(world championships?|worlds \d{4}|shooting stars|medal(l?ist|s)?|podium|athlete|sportsman|sportswoman|qualifier|shot ?put|marathon|taekwondo|karate|judo|chess|cycling tour|grand prix|racing)\b/i,
   /\b(film|movie|cinema|festival|actor|actress|director'?s cut|box office|series|drama|music|singer|concert|album|art exhibition|museum|carpet weaving|handicraft)\b/i,
   /\b(recipe|cuisine|restaurant|tourism|tourist|travel guide|hotel|resort|nowruz celebration|fashion|celebrity|royal family|dating|horoscope)\b/i,
   /\b(earthquake drill|weather forecast|air pollution index|traffic accident|road crash|bus crash|train derail)\b/i,

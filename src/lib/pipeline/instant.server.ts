@@ -69,7 +69,13 @@ export async function runInstant(): Promise<InstantStats> {
     return stats;
   }
 
+  // The scheduler ticks every minute; the admin-set interval decides how often
+  // work actually happens.
   const intervalMinutes = Number((settings as any)["instant_poll_minutes"] ?? 5);
+  const lastRun = (settings as any)["instant_last_run_at"] as string | null;
+  if (lastRun && Date.now() - Date.parse(lastRun) < intervalMinutes * 60_000 - 5_000) {
+    return stats;
+  }
   const { data: sources } = await supabaseAdmin
     .from("sources")
     .select("*")
@@ -79,6 +85,11 @@ export async function runInstant(): Promise<InstantStats> {
   const instant = (sources ?? []).filter((s: any) => (s.config?.mode ?? "normal") === "instant");
   stats.channels = instant.length;
   if (!instant.length) return stats;
+
+  await supabaseAdmin
+    .from("settings")
+    .update({ instant_last_run_at: new Date().toISOString() } as never)
+    .eq("id", 1);
 
   const collected: Array<{ post: ChannelPost; text: string }> = [];
 
