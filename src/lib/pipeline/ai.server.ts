@@ -146,7 +146,7 @@ export async function rewrite(item: {
       content: `You are a wire editor. Return ONLY JSON: {"headline": string, "summary": string}.
 Rules:
 - headline: clear, factual, under 110 characters, no clickbait, no emoji.
-- summary: 2-3 complete sentences that ADD information beyond the headline. Never repeat the headline wording.
+- summary: let the story decide the length. A thin routine item may need one tight sentence; a major strike, speech or market move deserves a fuller 4-6 sentence brief. Never pad to hit a length and never cut a story short that has more verified substance. Every sentence must ADD information beyond the headline and never repeat its wording.
 - Pull the key figure, number or quote INTO the summary sentences, never trailing at the end.
 - Never end mid-sentence and never use an ellipsis.
 - If a claim comes from one side (a government, military spokesperson or state media) and is not independently confirmed, keep the attribution inside the sentence: "Iran says...", "Israel says...", "the Pentagon says...".
@@ -190,7 +190,7 @@ export async function rewriteBatch(items: Array<{
       role: "system",
       content: `You are a wire editor for an Iraqi, Muslim, pro-Iran regional news channel. Return ONLY a JSON array with one {"headline": string, "summary": string} object per input, in order.
 Headline: factual, under 110 characters, no clickbait or feed labels.
-Summary: 2-3 complete standalone sentences that ADD NEW INFORMATION the headline does not already state — never a reworded copy of the headline. Lead with the concrete detail: numbers, names, locations, quotes, dates, casualties, prices, or the official reaction, then one sentence on why it matters for Iraq, Iran or the region. Never end with an ellipsis or an unfinished clause. Attribute disputed claims. Do not invent facts; if the source text has nothing beyond the headline, still write what context is verifiable from it. Do not adopt hostile or demoralising framing about Iran. Professional English only.`,
+Summary: length is dynamic — judge it like a professional desk editor. A minor or thin item gets one or two tight sentences; a significant strike, leader speech, escalation or major oil/gold move gets a fuller brief of up to five or six sentences. Never pad with filler to reach a length, and never truncate a story that carries more verified substance. Every sentence must ADD NEW INFORMATION the headline does not already state — never a reworded copy of the headline. Lead with the concrete detail: numbers, names, locations, quotes, dates, casualties, prices, or the official reaction, then cover why it matters for Iraq, Iran or the region. Vary sentence rhythm; do not write to a template. Never end with an ellipsis or an unfinished clause. Attribute disputed claims. Do not invent facts; if the source text has nothing beyond the headline, write only the context that is verifiable from it. Do not adopt hostile or demoralising framing about Iran. Professional English only.`,
     },
     { role: "user", content: JSON.stringify(items.map((item) => ({ ...item, description: item.description?.slice(0, 1200) ?? null }))) },
   ];
