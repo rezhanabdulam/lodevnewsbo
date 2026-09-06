@@ -446,7 +446,8 @@ export async function vercelTranslate(model: string, text: string): Promise<stri
         { role: "user", content: text.slice(0, 900) },
       ],
       temperature: 0,
-      max_tokens: 320,
+      // Reasoning models spend part of the budget thinking before answering.
+      max_tokens: /minimax|thinking|reason/i.test(model) ? 1600 : 320,
     }),
   });
   const body = await res.text();
