@@ -19,7 +19,7 @@ async function chat(
     model,
     messages,
     temperature: 0,
-    max_tokens: 220,
+    max_tokens: 460,
   };
   if (model.startsWith("openai/gpt-5.6")) body["reasoning_effort"] = "none";
 
@@ -367,7 +367,7 @@ async function minimaxTranslate(key: TranslationKey, text: string): Promise<stri
         { role: "user", content: text.slice(0, 900) },
       ],
       temperature: 0,
-      max_tokens: 260,
+      max_tokens: 520,
     }),
   });
   const body = await res.text();
@@ -447,7 +447,7 @@ export async function vercelTranslate(model: string, text: string): Promise<stri
       ],
       temperature: 0,
       // Reasoning models spend part of the budget thinking before answering.
-      max_tokens: /minimax|thinking|reason/i.test(model) ? 1600 : 320,
+      max_tokens: /minimax|thinking|reason/i.test(model) ? 1600 : 520,
     }),
   });
   const body = await res.text();
