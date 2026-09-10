@@ -220,6 +220,7 @@ export type Database = {
       settings: {
         Row: {
           bot_paused: boolean
+          bot_paused_at: string | null
           bot_paused_reason: string | null
           breaking_categories: string[]
           breaking_interrupts_night: boolean
@@ -261,6 +262,7 @@ export type Database = {
         }
         Insert: {
           bot_paused?: boolean
+          bot_paused_at?: string | null
           bot_paused_reason?: string | null
           breaking_categories?: string[]
           breaking_interrupts_night?: boolean
@@ -302,6 +304,7 @@ export type Database = {
         }
         Update: {
           bot_paused?: boolean
+          bot_paused_at?: string | null
           bot_paused_reason?: string | null
           breaking_categories?: string[]
           breaking_interrupts_night?: boolean
