@@ -445,6 +445,57 @@ export type Database = {
         }
         Relationships: []
       }
+      translation_provider_keys: {
+        Row: {
+          api_key: string
+          consecutive_failures: number
+          cooldown_until: string | null
+          created_at: string
+          enabled: boolean
+          id: string
+          label: string | null
+          last_error: string | null
+          last_status: number | null
+          last_used_at: string | null
+          model: string | null
+          priority: number
+          provider: string
+          updated_at: string
+        }
+        Insert: {
+          api_key: string
+          consecutive_failures?: number
+          cooldown_until?: string | null
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          label?: string | null
+          last_error?: string | null
+          last_status?: number | null
+          last_used_at?: string | null
+          model?: string | null
+          priority?: number
+          provider: string
+          updated_at?: string
+        }
+        Update: {
+          api_key?: string
+          consecutive_failures?: number
+          cooldown_until?: string | null
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          label?: string | null
+          last_error?: string | null
+          last_status?: number | null
+          last_used_at?: string | null
+          model?: string | null
+          priority?: number
+          provider?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
